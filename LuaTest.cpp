@@ -140,16 +140,6 @@ LUA_CLASS_EXPORT_END() //结束
 
 int main(void)
 {
-	//auto l = luaL_newstate();
-	//luaL_openlibs(l);
-
-	//auto top1 = lua_gettop(l);
-	//auto what = lua_getglobal(l, "xxxx1");
-	//auto top2 = lua_gettop(l);
-
-	//auto nul = lua_isnil(l, -1);
-	//lua_close(l);
-
 	RunLuaCaller();
 	RunLuaExportor();
 	RunLuaExportClass();
