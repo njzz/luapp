@@ -56,8 +56,9 @@ namespace app {
 			return *this;
 		}
 
-		bool LuaWrap::Init(const NewVMInit &f)
+		int LuaWrap::Init()
 		{
+			bool golbalFuncInited = true;
 			if (m_ls == nullptr) {
 				bool bNewed = false;
 				m_ls = cached().get([&bNewed]() {//获取一个未使用的 state ,没有就创建新的
@@ -67,15 +68,13 @@ namespace app {
 
 				if (bNewed && m_ls) {//新创建的
 					luaL_openlibs(m_ls);//打开lua标准库
-
 					auto &g = GLVMNew();
-					if (g)
-						g(*this);
-					if (f)
-						f(*this);//通知新的虚拟机
+					if(g)
+						golbalFuncInited = g(*this);
 				}
 			}
-			return m_ls != nullptr;
+			//0:success  1:ls=nullptr  2:globalinit failed
+			return (m_ls == nullptr) ?1:(golbalFuncInited?0:2);
 		}
 
 		void LuaWrap::Destroy()

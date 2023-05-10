@@ -36,8 +36,9 @@ namespace app {
 			using ClassType = typename base::mfunction_traits<MFunction>::class_type;
 			using ReturnType = typename base::mfunction_traits<MFunction>::rt_type;
 
-			LuaBinderClass(lua_State *ls, const char *pName, MFunction f) :m_n(pName), m_f(f) {
+			LuaBinderClass(lua_State *ls, const char *pName, MFunction f) :m_f(f) {
 				m_ls=ls;
+				m_name = pName;
 			}
 			~LuaBinderClass() {
 				//一般不需要，直接关闭状态机即可，所以不写在析构函数里
@@ -100,12 +101,7 @@ namespace app {
 				//return false;//不清理内存，只能全部关闭的时候清理
 			//}
 
-			const std::string &name() const override {
-				return m_n;
-			}
-
 		protected:
-			std::string m_n;//名字
 			MFunction m_f;//成员函数指针
 			CallParamTuple m_p{};//参数
 		};

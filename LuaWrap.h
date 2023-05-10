@@ -33,9 +33,9 @@ namespace app {
 			//移动赋值
 			LuaWrap &operator =(LuaWrap &&r);
 
-			//初始化，并传递一个回调函数，如果同时设置全局回调，先调用全局的
-			//注：只有新建状态机的时候才会回调，复用不会回调
-			bool Init(const NewVMInit &f=nullptr);
+			//初始化，如果是新的状态机，会调用 SetGlobalInit 设置的初始化函数
+			//返回值 0:成功  1:新建状态机失败  2:全局初始化函数失败
+			int Init();
 
 			//销毁当前状态机
 			void Destroy();

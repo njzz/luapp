@@ -15,16 +15,20 @@ namespace app {
 		struct pcb_set {
 			virtual ~pcb_set() = default;
 			virtual int call(lua_State *) = 0;
-			virtual const std::string &name() const = 0;
 			//virtual bool release() = 0;
 
+			inline const std::string &name() const {
+				return m_name;
+			};
+
 			//通用回调函数
-			inline static int LuaCallBack(lua_State* L) {
+			static int LuaCallBack(lua_State* L) {
 				auto pv = (pcb_set*)lua_topointer(L, lua_upvalueindex(1));
 				return pv->call(L);
 			}
 
 			lua_State *m_ls;//关联的状态机
+			std::string m_name;//name
 		};
 
 		//设置返回值给lua的参数
@@ -144,8 +148,9 @@ namespace app {
 			using CallParamTuple = typename base::function_traits<Function>::param_tuple;
 			using FuncRtType = typename base::function_traits<Function>::rt_type;
 
-			LuaBinder(lua_State *ls, const char *pName, Function &&f) : m_n(pName), m_f(std::move(f)) {
+			LuaBinder(lua_State *ls, const char *pName, Function &&f) : m_f(std::move(f)) {
 				m_ls=ls;
+				m_name = pName;
 			}
 			~LuaBinder() {
 				//一般不需要，直接关闭状态机即可，所以不写在析构函数里
@@ -213,12 +218,7 @@ namespace app {
 			//	return true;
 			//}
 
-			const std::string &name() const override{
-				return m_n;
-			}
-
 		protected:
-			std::string m_n;//name
 			Function m_f;//回调函数
 			CallParamTuple m_p{};//参数
 		};
