@@ -105,7 +105,6 @@ namespace app {
 			}
 
 		protected:
-			lua_State *m_ls;//关联的状态机
 			std::string m_n;//名字
 			MFunction m_f;//成员函数指针
 			CallParamTuple m_p{};//参数
