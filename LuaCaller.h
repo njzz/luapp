@@ -12,150 +12,172 @@ namespace app {
 	namespace lua {
 		//偷下懒 ，空参数用结构代替
 		struct emp {};
+
+		//传递给lua的void *参数，作为lightuserdata
+		//传递给lua的mtable参数，创建新的userdata,并设置元表table_name，一般用于把在c++里面创建的对象，传递给lua使用，并且已经在lua里导出该类
+		//从lua获取的 void *(返回值/参数) 为 userdata 或 lightuserdata，需要根据具体函数转换 如果为导出对象T，则转换为 T**
+		//PS:所有以mtable方式传递给lua的userdata对象，由lua管理内存，里面的p不参与析构
+		// 1.如果p是c++导出类对象，在lua创建，然后多次传入穿出，则由原始关联的userdata析构时析构 
+		// 2.如果p是c++代码创建，包裹p的userdata析构时，p不参与析构
+		struct mtable {
+			mtable(void *p, const char *name) :pointer(p),table_name(name){}
+			void *pointer;
+			const char *table_name;//一般为类名
+		};
+
+		
+		//Lua参数操作
+		struct LuaArg {
+			//set 压栈给lua 1.调用lua函数时压栈参数给lua函数  2.lua调用c++后返回给lua结果
+			inline static int set(lua_State *ls, bool arg) {
+				// lua_checkstack确保堆栈上至少有"n"个额外空位。假设不能把堆栈扩展到相应的尺寸，函数返回"false"。
+				// 失败的原因包括将把栈扩展到比固定最大尺寸还大（至少是几千个元素）或分配内存失败。
+				// lua 栈已经足够大，不用检查
+				//if (lua_checkstack(ls, 1))
+				lua_pushboolean(ls, arg?1:0);
+				return 1;
+			}
+			inline static int set(lua_State *ls, int arg) {
+				lua_pushinteger(ls, arg);
+				return 1;
+			}
+			inline static int set(lua_State *ls, long long arg) {
+				lua_pushinteger(ls, arg);
+				return 1;
+			}
+			inline static int set(lua_State *ls, size_t arg) {
+				lua_pushinteger(ls, arg);
+				return 1;
+			}
+			inline static int set(lua_State *ls, float arg) {
+				lua_pushnumber(ls, arg);
+				return 1;
+			}
+			inline static int set(lua_State *ls, double arg) {
+				lua_pushnumber(ls, arg);
+				return 1;
+			}
+			inline static int set(lua_State *ls, const char* arg) {
+				lua_pushstring(ls, arg);
+				return 1;
+			}
+			inline static int set(lua_State *ls, const std::string& arg) {
+				lua_pushlstring(ls, arg.c_str(), arg.length());
+				return 1;
+			}
+
+			static int set_metatable(lua_State *ls, const mtable &mt, char flag);
+			inline static int set(lua_State *ls, const mtable &mt) {
+				return set_metatable(ls, mt, 0);
+			}
+
+			inline static int set(lua_State *ls, void* arg) {
+				lua_pushlightuserdata(ls, arg);
+				return 1;
+			}
+			inline static int set(lua_State *ls, nullptr_t arg) {
+				lua_pushnil(ls);
+				return 1;
+			}
+
+			//注意 set 和 setargs
+			inline static int setargs(lua_State *ls) { return 0; }//0个参数版本
+
+			template <typename T>
+			static int set(lua_State *, T) {
+				static_assert(/*std::is_integral<T>::value*/false, "set:arg type not support: [bool,int,long long,size_t,float,double,const char * ,void *,std::string,std::tuple");
+				return 0;
+			}
+
+			template<typename Ty, typename...Args>
+			inline static int setargs(lua_State *ls, Ty &&arg1, Args&&...args) {
+				auto rt=set(ls, arg1);//调用其它版本函数
+				rt+= setargs(ls, args...);//如果args还剩下一个，调用其它函数，否则调用自己
+				return rt;
+			}
+
+			template<typename ...Args, size_t... indexs>
+			static void set_tuple(lua_State *ls, const std::tuple<Args...> &v, const std::index_sequence<indexs... > &) {
+				setargs(ls, std::get<indexs>(v)...);
+			}
+
+			template<typename ...Args>
+			static int set(lua_State *ls, const std::tuple<Args...> &v) {
+				constexpr auto rt_size = sizeof...(Args);//(int)std::tuple_size<std::tuple<Args...>>::value;
+				using  typeindex = std::make_index_sequence<rt_size>;
+				set_tuple(ls, v, typeindex{});
+				return rt_size;
+			}
+
+			//get 系列 1.c++调用lua后获取lua的返回值    2.lua调用c++时，获取lua传过来的参数
+			static void get(lua_State *states, int index, bool &arg) {
+				//lua_toboolean
+				arg = luaL_checkinteger(states, index) != 0;
+			}
+			static void get(lua_State *states, int index, int &arg) {
+				arg = (int)luaL_checkinteger(states, index);
+			}
+			static void get(lua_State *states, int index, long long &arg) {
+				arg = (long long)luaL_checkinteger(states, index);
+			}
+			static void get(lua_State *states, int index, size_t &arg) {
+				arg = (size_t)luaL_checkinteger(states, index);
+			}
+			static void get(lua_State *states, int index, float &arg) {
+				arg = (float)luaL_checknumber(states, index);
+			}
+			static void get(lua_State *states, int index, double &arg) {
+				arg = (double)luaL_checknumber(states, index);
+			}
+			static void get(lua_State *states, int index, const char* &arg) {
+				arg = (const char *)luaL_checkstring(states, index);
+			}
+			static void get(lua_State *states, int index, void* &arg) {
+				arg = (void *)lua_touserdata(states, index);
+			}
+			static void get(lua_State *states, int index, std::string &arg) {
+				size_t t = 0;
+				auto sr = luaL_checklstring(states, index, &t);
+				if (sr && t > 0) arg.assign(sr, t);
+			}
+			static void get(lua_State *ls, int idx, emp &) {//空结果特化
+			}
+			static void getargs(lua_State *states, int index) {}//0个参数版本
+
+			template <typename T>
+			static void get(lua_State *,int, T) {
+				static_assert(/*std::is_integral<T>::value*/false, "get:arg type not support: [bool,int,long long,size_t,float,double,const char * ,void *,std::string,std::tuple");
+			}
+
+			template<typename Ty, typename...Args> inline
+				static void getargs(lua_State *states, int index, Ty& arg1, Args&...args)
+			{
+				get(states, index, arg1);//调用其它函数
+				getargs(states, index + 1, args...);//如果args还剩下一个，调用其它函数，否则调用自己
+			}
+
+			template<typename ...Args, size_t... indexs>
+			static void get_tuple(lua_State *ls, std::tuple<Args...> &v, const std::index_sequence<indexs... > &) {
+				auto p_size = (int)sizeof...(Args);//个数，1个就是从 -1获取，2个就是 -2，以此类推
+				getargs(ls, -p_size, std::get<indexs>(v)...);
+			}
+
+			//函数不能部分特例化，如果需要可以使用类/结构
+			template<typename ...Args>
+			static void get(lua_State *ls, int idx , std::tuple<Args...> &r) {
+				constexpr auto rt_size = (int)sizeof...(Args);// std::tuple_size<std::tuple<T...>>::value;
+				using  typeindex = std::make_index_sequence<rt_size>;
+				get_tuple(ls, r, typeindex{});
+			}
+		};
+
+		
 		//该类封装，用来调用LUA脚本里的函数
 		//virtual public lua::VM 
 		class LuaCaller :public lua::VM {			
 		protected:
-			//调用lua，压入参数
-			void pusharg(int arg);
-			void pusharg(long long arg);
-			void pusharg(size_t arg);
-			void pusharg(float arg);
-			void pusharg(double arg);
-			void pusharg(const char* arg);
-			void pusharg(const std::string& arg);
-			void pusharg(void* arg);
-			void pusharg(nullptr_t arg);
-			void pusharg() {}//0个参数版本
-
-
-			template<typename _Ty, typename..._Args> inline
-				void pusharg(_Ty arg1, const _Args&...args)
-			{
-				pusharg(arg1);//调用其它函数
-				pusharg(args...);//如果args还剩下一个，调用其它函数，否则调用自己
-			}
-
 			//确认函数，并压栈
 			bool luax_assume_func(const char* func);
-
-			//调用lua，获取返回值(做个返回tuple的，函数不能部分特例化，使用结构)
-			template<typename _Ty>
-			struct LuaCallRt {
-				static _Ty get(lua_State *ls) {
-					//return luax_getretval<_Ty>();
-					static_assert(false, "return type not int support list: [bool,int,long long,size_t,float,double,std::string,std::tuple");
-				}
-			};
-
-			template<> struct LuaCallRt<bool> {
-				static bool get(lua_State *ls,int idx = -1) {
-					bool r = false;
-					if (lua_isboolean(ls, idx)) {						
-						r = lua_toboolean(ls, idx)!=0;
-					}
-					return false;
-				}
-			};
-
-			template<> struct LuaCallRt<int> {
-				static int get(lua_State *ls, int idx = -1) {
-					int r = 0;
-					if (lua_isinteger(ls, idx)) {
-						r = (int)lua_tointeger(ls, idx);
-					}
-					return r;
-				}
-			};
-
-			template<> struct LuaCallRt<long long> {
-				static long long get(lua_State *ls, int idx = -1) {
-					long long r = 0;
-					if (lua_isinteger(ls, idx)) {
-						r = (long long)lua_tointeger(ls, idx);
-					}
-					return r;
-				}
-			};
-
-			template<> struct LuaCallRt<size_t> {
-				static size_t get(lua_State *ls, int idx = -1) {
-					size_t r = 0;
-					if (lua_isinteger(ls, idx)) {
-						r = (size_t)lua_tointeger(ls, idx);
-					}
-					return r;
-				}
-			};
-
-			template<> struct LuaCallRt<float> {
-				static float get(lua_State *ls, int idx = -1) {
-					float r = 0;
-					if (lua_isnumber(ls, idx)) {
-						r = (float)lua_tonumber(ls, idx);
-					}
-					return r;
-				}
-			};
-
-			template<> struct LuaCallRt<double> {
-				static double get(lua_State *ls, int idx = -1) {
-					double r = 0;
-					if (lua_isnumber(ls, idx)) {
-						r = lua_tonumber(ls, idx);
-					}
-					return r;
-				}
-			};
-
-			template<> struct LuaCallRt<std::string> {
-				static std::string get(lua_State *ls, int idx = -1) {
-					std::string r;
-					if (lua_isstring(ls, idx)) {
-						size_t l=0;
-						auto sr = lua_tolstring(ls, idx,&l);
-						if (sr && l > 0) r.assign(sr, l);
-					}
-					return r;
-				}
-			};
-
-			//空参数版本
-			template<> struct LuaCallRt<emp> {
-				static emp get(lua_State *ls, int idx = -1) {
-					return emp{};
-				}
-			};
-
-			//返回多个结果，用tuple，函数不能部分特例化，只能使用类/结构
-			template<typename ...T>
-			struct LuaCallRt<std::tuple<T...>>{
-				
-				//返回tuple，无参数版本
-				static inline void r_tuple(lua_State *ls,int idx) {}
-
-				//解tuple，1个至多个参数版本
-				template<typename _Ty, typename..._Args>
-				static inline void r_tuple(lua_State *ls,int idx,_Ty& arg1, _Args&...args)
-				{
-					arg1 = LuaCallRt<_Ty>::get(ls,idx);
-					r_tuple(ls,idx+1,args...);//如果args还剩下一个，调用其它函数，否则调用自己
-				}
-
-				template<typename ...T, size_t... indexs>
-				static void r_tuple_helper(lua_State *ls,std::tuple<T...> &v, const std::index_sequence<indexs... > &) {
-					auto p_size = (int)sizeof...(T);//返回值个数，1个就是从 -1获取，2个就是 -2，以此类推
-					r_tuple(ls,-p_size,std::get<indexs>(v)...);
-				}
-
-				static std::tuple<T...> get(lua_State *ls, int idx = -1) {
-					constexpr auto rt_size = (int)sizeof...(T);// std::tuple_size<std::tuple<T...>>::value;
-					using  typeindex = std::make_index_sequence<rt_size>;
-					std::tuple<T...> rt;
-					r_tuple_helper(ls,rt, typeindex{});
-					return rt;
-				}
-			};
 
 			//根据Return类型推导返回值个数
 			template<typename T>
@@ -183,14 +205,13 @@ namespace app {
 				if (luax_assume_func(func)) {
 					auto sizeVar = sizeof...(args);
 					auto topCheck = lua_gettop(m_ls);//返回栈顶原始索引，因为栈底是1，所以就是当前栈大小
-					pusharg(args...);
+					LuaArg::setargs(m_ls,args...);
 					auto pushedVar = lua_gettop(m_ls) - topCheck;//参数个数
 					if (pushedVar == (int)sizeVar) {//参数检查
 						const int rtValueCount = ReturnParamCounts<_Result>::value;
 						if (lua_pcall(m_ls, pushedVar, rtValueCount, 0) == 0) {
-							if (rtValueCount > 0)
-							{
-								result = LuaCallRt<_Result>::get(m_ls);
+							if (rtValueCount > 0){
+								LuaArg::get(m_ls,-1,result);
 							}
 						}
 						//else {//call error,info:lua_tostring(m_ls, -1)
@@ -216,7 +237,7 @@ namespace app {
 						{
 							auto sizeVar = sizeof...(args);
 							auto topCheck = lua_gettop(m_ls);//当前栈顶
-							pusharg(args...);
+							LuaArg::setargs(m_ls,args...);
 
 							auto pushedVar = lua_gettop(m_ls) - topCheck;//参数个数
 
@@ -225,7 +246,7 @@ namespace app {
 								if (lua_pcall(m_ls, pushedVar, rtValueCount, 0) == 0) {
 									if (rtValueCount > 0)
 									{
-										result = LuaCallRt<_Result>::get(m_ls);
+										LuaArg::get(m_ls, -1, result);
 									}
 								}
 								//else {//call error,info:lua_tostring(m_ls, -1)
@@ -234,7 +255,7 @@ namespace app {
 						}
 					}
 					else if (rtValueCount > 0) {
-						result = LuaCallRt<_Result>::get(m_ls);
+						LuaArg::get(m_ls, -1, result);
 					}
 				}
 				lua_settop(m_ls, top); // resume stack		
@@ -243,6 +264,9 @@ namespace app {
 
 		public:
 			//任意返回值版本
+			//如果调用参数为void *,则压栈为 lightuserdata
+			//如果参数为 const mtable &,压栈为userdata
+			//如果返回值为 void *,则lua可返回 lightuserdata 或 userdata
 			template<typename _Result, typename..._Args>
 			typename std::conditional<std::is_same<_Result, void>::value, lua::emp, _Result>::type Call(const char*  func, const _Args&...args) {
 				//可以return void;但不能 void = void;

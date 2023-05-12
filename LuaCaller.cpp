@@ -2,63 +2,26 @@
 
 namespace app {
 	namespace lua {
-		void LuaCaller::pusharg(int arg)
-		{
 
-			/* lua_checkstack确保堆栈上至少有"n"个额外空位。假设不能把堆栈扩展到相应的尺寸，函数返回"false"。
-			 * 失败的原因包括将把栈扩展到比固定最大尺寸还大（至少是几千个元素）或分配内存失败。
-			 * 这个函数永远不会缩小堆栈，假设堆栈已经比须要的大了，那么就保持原样。
-			*/
-			if (lua_checkstack(m_ls, 1))
-				lua_pushinteger(m_ls, arg);
-		}
-
-		void LuaCaller::pusharg(long long arg)
-		{
-			if (lua_checkstack(m_ls, 1))
-				lua_pushinteger(m_ls, arg);
-		}
-
-		void LuaCaller::pusharg(size_t arg)
-		{
-			if (lua_checkstack(m_ls, 1))
-				lua_pushinteger(m_ls, arg);
-		}
-
-		void LuaCaller::pusharg(float arg)
-		{
-			if (lua_checkstack(m_ls, 1))
-				lua_pushnumber(m_ls, arg);
-		}
-
-		void LuaCaller::pusharg(double arg)
-		{
-			if (lua_checkstack(m_ls, 1))
-				lua_pushnumber(m_ls, arg);
-		}
-
-		void LuaCaller::pusharg(const char * arg)
-		{
-			if (lua_checkstack(m_ls, 1))
-				lua_pushstring(m_ls, arg);
-		}
-
-		void LuaCaller::pusharg(const std::string & arg)
-		{
-			if (lua_checkstack(m_ls, 1))
-				lua_pushlstring(m_ls, arg.c_str(), arg.length());
-		}
-
-		void LuaCaller::pusharg(void * arg)
-		{
-			if (lua_checkstack(m_ls, 1))
-				lua_pushlightuserdata(m_ls, arg);
-		}
-
-		void LuaCaller::pusharg(nullptr_t arg)
-		{
-			if (lua_checkstack(m_ls, 1))
-				lua_pushnil(m_ls);
+		int LuaArg::set_metatable(lua_State *ls, const mtable &mt, char gc) {
+			//将new userdata压栈，最多后一个字节
+			//表明关联的对象是否随userdata回收，需要和导出类 GC 联动
+			//如果最后一个字节  0:表示不回收  1:随userdata 回收
+			constexpr auto szptr = sizeof(void*);
+			auto a = (void*)lua_newuserdata(ls, szptr + sizeof(char));
+			memcpy(a, &(mt.pointer), szptr);//将指针数据写入
+			memcpy((char*)a + szptr, &gc, 1);//写入最后一个字节
+			auto type = luaL_getmetatable(ls, mt.table_name); //将table压栈
+			int r = 0;
+			if (type == LUA_TTABLE) {
+				lua_setmetatable(ls, -2); //将栈顶的table 设置为 -2 位置userdata 的元表，弹出栈顶，栈顶为userdata
+				r = 1;
+			}
+			else {
+				assert(false);
+				lua_pop(ls, 2);//弹出2个，栈顶和userdata,userdata由lua回收
+			}
+			return r;
 		}
 
 		bool LuaCaller::luax_assume_func(const char * func) {

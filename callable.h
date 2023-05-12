@@ -58,6 +58,7 @@ namespace base {
 	template <typename T>
 	struct mfunction_traits : public mfunction_traits < decltype(T) > {};
 
+	//普通版本
 	template <typename ClassType, typename ReturnType, typename ...Args>
 	struct mfunction_traits < ReturnType(ClassType::*)(Args...)>
 	{
@@ -67,5 +68,14 @@ namespace base {
 		using rt_type = ReturnType;//return 类型
 	};
 
+	//const 版本
+	template <typename ClassType, typename ReturnType, typename ...Args>
+	struct mfunction_traits < ReturnType(ClassType::*)(Args...) const>
+	{
+		using class_type = ClassType;
+		using p_type = ReturnType(ClassType::*)(Args...) const;//pointer 类型
+		using param_tuple = std::tuple< Args...>;//param 类型
+		using rt_type = ReturnType;//return 类型
+	};
 	
 }

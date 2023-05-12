@@ -11,16 +11,16 @@ namespace app {
 
 		//调用并设置返回值
 		template <typename R>
-		struct LuaInvokeMemF {
+		struct InvokeMemberFunction {
 			template <typename Class,typename F, typename ...Args>
 			inline static int call(lua_State *states,Class *obj, F f, Args&&... args) {
-				return RLUA<R>::set(states, (obj->*f)(std::forward<Args>(args)...));//包含返回值的情况
+				return LuaArg::set(states, (obj->*f)(std::forward<Args>(args)...));//包含返回值的情况
 			}
 		};
 
 		//无参数版本，需要根据返回值区分，在RP里不能特化，因为set的void参数不能实例化
 		template <>
-		struct LuaInvokeMemF<void> {
+		struct InvokeMemberFunction<void> {
 			template <typename Class, typename F, typename ...Args>
 			inline static int call(lua_State *states, Class *obj, F f, Args&&...args) {
 				(obj->*f)(std::forward<Args>(args)...);
@@ -44,49 +44,13 @@ namespace app {
 				//一般不需要，直接关闭状态机即可，所以不写在析构函数里
 				//release()
 			}
-			//获取lua传过来的参数
-			inline void getargs(lua_State *states, int index, bool &arg) {
-				arg = luaL_checkinteger(states, index) != 0;
-			}
-			inline void getargs(lua_State *states, int index, int &arg) {
-				arg = (int)luaL_checkinteger(states, index);
-			}
-			inline void getargs(lua_State *states, int index, long long &arg) {
-				arg = (long long)luaL_checkinteger(states, index);
-			}
-			inline void getargs(lua_State *states, int index, size_t &arg) {
-				arg = (size_t)luaL_checkinteger(states, index);
-			}
-			inline void getargs(lua_State *states, int index, float &arg) {
-				arg = (float)luaL_checknumber(states, index);
-			}
-			inline void getargs(lua_State *states, int index, double &arg) {
-				arg = (double)luaL_checknumber(states, index);
-			}
-			inline void getargs(lua_State *states, int index, const char* &arg) {
-				arg = (const char *)luaL_checkstring(states, index);
-			}
-			inline void getargs(lua_State *states, int index, std::string &arg) {
-				size_t t = 0;
-				auto sr = luaL_checklstring(states, index, &t);
-				if (sr && t > 0) arg.assign(sr, t);
-			}
-			inline void getargs(lua_State *states, int index) {}//0个参数版本
-
-
-			template<typename _Ty, typename..._Args> inline
-				void getargs(lua_State *states, int index, _Ty& arg1, _Args&...args)
-			{
-				getargs(states, index, arg1);//调用其它函数
-				getargs(states, index + 1, args...);//如果args还剩下一个，调用其它函数，否则调用自己
-			}
-
+			
 			template<size_t... indexs>
 			int FillParamsAndCall(lua_State *states, const std::index_sequence<indexs... > &) {
 				//constexpr auto param_size = std::tuple_size<CallParamTuple>::value;				
 				auto obj =(ClassType **) lua_touserdata(states, 1);//使用的userdata元表方式，那么第1个参数是userdata的值
-				getargs(states, 2, std::get<indexs>(m_p)...);//lua参数从2开始，用tuple存储参数
-				return LuaInvokeMemF<ReturnType>::call(states,*obj, m_f, std::get<indexs>(m_p)...);//用tuple里的参数去调用c函数
+				LuaArg::getargs(states, 2, std::get<indexs>(m_p)...);//lua参数从2开始，用tuple存储参数
+				return InvokeMemberFunction<ReturnType>::call(states,*obj, m_f, std::get<indexs>(m_p)...);//用tuple里的参数去调用c函数
 			}
 
 			//继承函数，开始调用
@@ -116,32 +80,35 @@ namespace app {
 		}
 		//////////////////// ---------------------
 
+		//可以通过重新定义 LUA_EXPORT_NEWOBJ 来重新定义对象xxx从lua里构造方式的方式  t:class type l:lua_state
+// 如:#define LUA_EXPORT_NEWOBJ(xxx,l) template<typename xxx> xxx *CreateByLua<xxx>(lua_tointeger(l,1));
+#ifndef LUA_EXPORT_NEWOBJ
+#define LUA_EXPORT_NEWOBJ(t,l) new t{};
+#endif
+
+//可以通过重新定义 LUA_EXPORT_DESTROYOBJ 来重新定义对象xxx的析构方式  t:class type   o:void *,userdata的开始地址，如果转换为对象指针则为 *(T**)o 
+// 如: #define LUA_EXPORT_DESTROYOBJ(xxx) void DestroyLuaObj(xxx);
+#ifndef LUA_EXPORT_DESTROYOBJ
+#define LUA_EXPORT_DESTROYOBJ(t,o) delete *((t**)o);
+#endif
+
+//根据类型，获取metatable名
+#ifndef LUA_EXPORT_METATABLE
+#define LUA_EXPORT_METATABLE(xx) #xx
+#endif
+
+
 //在class里申明，对象需要有默认构造函数或者重新定义 LUA_EXPORT_NEWOBJ
 #define LUA_CLASS_EXPORT_DECLARE \
 		static void LuaClassRegister(lua_State *l);\
 		static int LuaClassConstructor(lua_State* L);\
 		static int LuaClassGC(lua_State* L)
 
-
-//在cpp里LUA_CLASS_EXPORT_BEGIN之前重新定义此宏，可以重新定义对象xxx从lua里构造方式的方式
-// 如:
-// #undef LUA_EXPORT_NEWOBJ
-// #define LUA_EXPORT_NEWOBJ(xxx,l) xxx *CreateByLua(lua_tointeger(l,1));
-#define LUA_EXPORT_NEWOBJ(xxx,l) new xxx{};
-
-//在cpp里LUA_CLASS_EXPORT_BEGIN之前重新定义此宏，可以重新定义对象xxx的析构的方式
-// 如:
-// #undef LUA_EXPORT_CLRAROBJ
-// #define LUA_EXPORT_CLRAROBJ(xxx) void DestroyLuaObj(xxx *);
-#define LUA_EXPORT_DESTROYOBJ(xxx) delete xxx;
-
  /*
  Constructor
  1.创建一个对象， 
- 2.申请一个userdata，入栈  
- 3.获取元表到栈顶  
- 4.将栈顶元表设置为入栈userdata的元表，弹出栈顶元表 
- 5.一个返回值，返回当前栈顶userdata，通过元方法调用时，该userdata为第一个参数 (index:1)
+ 2.关联一个到元表
+ 3.一个返回值，返回set_metatable压栈的元表
 
 GC对象回收:只回收new出来的对象，绑定的函数对象是类公用的，状态机关闭时统一回收
 1.检查-1位置参数是否是一个类型为classname的用户数据（参见 luaL_newmetatable ),返回数据的地址（lua_touserdata）
@@ -166,26 +133,27 @@ LUA_CLASS_EXPORT_END  当前元表在栈顶   注册__index方法，恢复栈顶
 12.-2元表复制入栈   lua_pushvalue(L, -2)  完成后栈 -1: 元表 -2:__index -3:元表
 13.将元表index设置为自己 lua_settable(L, -3) t[k] = v  t:index在栈中的值(元表) v:栈顶(元表) k:是栈顶下的内容(__index)  然后弹出k和v
 
+PS:也可以将__index,__newindex 设置为C函数，然后在C代码里操作
+
  */
 #define LUA_CLASS_EXPORT_BEGIN(CLASSNAME)\
 		int CLASSNAME::LuaClassConstructor(lua_State* L) {\
 			auto obj = LUA_EXPORT_NEWOBJ(CLASSNAME,L);\
-			auto a = (CLASSNAME*)lua_newuserdata(L, sizeof(void*));\
-			memcpy(a, &obj, sizeof(a));\
-			luaL_getmetatable(L, #CLASSNAME);\
-			lua_setmetatable(L, -2);\
-			return 1;\
+			auto r = app::lua::LuaArg::set_metatable(L,app::lua::mtable{obj, LUA_EXPORT_METATABLE(CLASSNAME)},1);\
+			if(r==0) {LUA_EXPORT_DESTROYOBJ(CLASSNAME,&obj);}\
+			return r;\
 		}\
 		int CLASSNAME::LuaClassGC(lua_State* L){\
-			auto obj = (CLASSNAME**)luaL_checkudata(L, -1, #CLASSNAME);\
-			LUA_EXPORT_DESTROYOBJ(*obj);\
+			auto obj = (void*)luaL_checkudata(L, -1, LUA_EXPORT_METATABLE(CLASSNAME));\
+			auto isgc = *((char *)obj+sizeof(void*));\
+			if(isgc){ LUA_EXPORT_DESTROYOBJ(CLASSNAME,obj);}\
 			return 0;\
 		}\
 		void CLASSNAME::LuaClassRegister(lua_State *L) {\
 			auto top = lua_gettop(L);\
 			lua_pushcfunction(L, &CLASSNAME::LuaClassConstructor);\
 			lua_setglobal(L,#CLASSNAME);\
-			luaL_newmetatable(L, #CLASSNAME);\
+			luaL_newmetatable(L, LUA_EXPORT_METATABLE(CLASSNAME));\
 			lua_pushstring(L, "__gc");\
 			lua_pushcfunction(L, &CLASSNAME::LuaClassGC);\
 			lua_settable(L, -3);\

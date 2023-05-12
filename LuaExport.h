@@ -23,7 +23,7 @@ namespace app {
 
 			//通用回调函数
 			static int LuaCallBack(lua_State* L) {
-				auto pv = (pcb_set*)lua_topointer(L, lua_upvalueindex(1));
+				auto pv = (pcb_set*)lua_touserdata(L, lua_upvalueindex(1));
 				return pv->call(L);
 			}
 
@@ -31,109 +31,18 @@ namespace app {
 			std::string m_name;//name
 		};
 
-		//设置返回值给lua的参数
-		template <typename T>
-		struct RLUA {
-			static int set(lua_State *, T) {
-				static_assert(std::is_integral<T>::value, "return type not int support list: [bool,int,long long,size_t,float,double,char * ,std::string,std::tuple");
-				return 0;
-			}
-		};
-
-		template <>	struct RLUA<bool> {
-			static int set(lua_State *l, bool v) {
-				lua_pushboolean(l, v ? 1 : 0);
-				return 1;
-			}
-		};
-
-		template <>	struct RLUA<int> {
-			static int set(lua_State *l, int v) {
-				lua_pushinteger(l, (lua_Integer)v);
-				return 1;
-			}
-		};
-
-		template <>	struct RLUA<long long> {
-			static int set(lua_State *l, long long v) {
-				lua_pushinteger(l, (lua_Integer)v);
-				return 1;
-			}
-		};
-		template <>	struct RLUA<size_t> {
-			static int set(lua_State *l, size_t v) {
-				lua_pushinteger(l, (lua_Integer)v);
-				return 1;
-			}
-		};
-
-		template <>	struct RLUA<float> {
-			static auto set(lua_State *l, float v) {
-				lua_pushnumber(l, v);
-				return 1;
-			}
-		};
-
-		template <>	struct RLUA<double> {
-			static auto set(lua_State *l, double v) {
-				lua_pushnumber(l, v);
-				return 1;
-			}
-		};
-
-		template <>	struct RLUA<char *> {
-			static auto set(lua_State *l, char *v) {
-				lua_pushstring(l, v);
-				return 1;
-			}
-		};
-
-		template <>	struct RLUA<std::string> {
-			static auto set(lua_State *l, const std::string &v) {
-				lua_pushlstring(l, v.c_str(), v.length());
-				return 1;
-			}
-		};
-
-
-		//返回参数，tuple 特例化
-		template <typename ...T> struct RLUA<std::tuple<T...>> {
-			//解tuple，无参数版本
-			static inline void tuple_deparam(lua_State *states) {}
-
-			//解tuple，1个至多个参数版本
-			template<typename _Ty, typename..._Args>
-			static inline void tuple_deparam(lua_State *states, const _Ty& arg1, const _Args&...args)
-			{
-				RLUA<_Ty>::set(states, arg1);
-				tuple_deparam(states, args...);//如果args还剩下一个，调用其它函数，否则调用自己
-			}
-
-			template<size_t... indexs>
-			static void dehelper(lua_State *l, const std::tuple<T...> &v, const std::index_sequence<indexs... > &) {
-				tuple_deparam(l, std::get<indexs>(v)...);
-			}
-
-			static int set(lua_State *l, const std::tuple<T...> &v) {
-				constexpr auto rt_size = (int)std::tuple_size<std::tuple<T...>>::value;
-				using  typeindex = std::make_index_sequence<rt_size>;
-				dehelper(l, v, typeindex{});
-				return rt_size;
-			}
-		};
-
 		//调用并设置返回值
 		template <typename R>
-		struct LuaInvoke {
+		struct InvokeCppFunction {
 			template <typename T, typename ...Args>
 			static int call(lua_State *states, const T &f, Args&&... args) {
-				return RLUA<R>::set(states, f(std::forward<Args>(args)...));//包含返回值的情况
+				return LuaArg::set(states, f(std::forward<Args>(args)...));//包含返回值的情况
 			}
 		};
 
 		//无参数版本，需要根据返回值区分，在RP里不能特化，因为set的void参数不能实例化
 		template <>
-		struct LuaInvoke<void> {
+		struct InvokeCppFunction<void> {
 			template <typename T, typename ...Args>
 			static int call(lua_State *states, const T &f, Args&&...args) {
 				f(std::forward<Args>(args)...);//用tuple调用函数
@@ -156,49 +65,12 @@ namespace app {
 				//一般不需要，直接关闭状态机即可，所以不写在析构函数里
 				//release()
 			}
-			//获取lua传过来的参数
-			inline void getargs(lua_State *states, int index, bool &arg) {
-				arg = luaL_checkinteger(states, index) != 0;
-			}
-			inline void getargs(lua_State *states, int index, int &arg) {
-				arg = (int)luaL_checkinteger(states, index);
-			}
-			inline void getargs(lua_State *states, int index, long long &arg) {
-				arg = (long long)luaL_checkinteger(states, index);
-			}
-			inline void getargs(lua_State *states, int index, size_t &arg) {
-				arg = (size_t)luaL_checkinteger(states, index);
-			}
-			inline void getargs(lua_State *states, int index, float &arg) {
-				arg = (float)luaL_checknumber(states, index);
-			}
-			inline void getargs(lua_State *states, int index, double &arg) {
-				arg = (double)luaL_checknumber(states, index);
-			}
-			inline void getargs(lua_State *states, int index, const char* &arg) {
-				arg = (const char *)luaL_checkstring(states, index);
-			}
-			inline void getargs(lua_State *states, int index, std::string &arg) {
-				size_t t=0;
-				auto sr = luaL_checklstring(states, index,&t);
-				if (sr && t > 0) arg.assign(sr, t);
-			}
-			inline void getargs(lua_State *states, int index) {}//0个参数版本
-
-
-			template<typename _Ty, typename..._Args> inline
-				void getargs(lua_State *states, int index, _Ty& arg1, _Args&...args)
-			{
-				getargs(states, index, arg1);//调用其它函数
-				getargs(states, index + 1, args...);//如果args还剩下一个，调用其它函数，否则调用自己
-			}
-
 
 			template<size_t... indexs>
 			int FillParamsAndCall(lua_State *states, const std::index_sequence<indexs... > &) {
 				//constexpr auto param_size = std::tuple_size<CallParamTuple>::value;
-				getargs(states, 1, std::get<indexs>(m_p)...);//lua参数从1开始，用tuple存储参数
-				return LuaInvoke<FuncRtType>::call(states, m_f, std::get<indexs>(m_p)...);//用tuple里的参数去调用c函数
+				LuaArg::getargs(states, 1, std::get<indexs>(m_p)...);//lua参数从1开始，用tuple存储参数
+				return InvokeCppFunction<FuncRtType>::call(states, m_f, std::get<indexs>(m_p)...);//用tuple里的参数去调用c函数
 			}
 
 			//继承函数，开始调用
@@ -321,7 +193,7 @@ namespace app {
 			bool PCBRegister( pcb_set *p) {
 				auto vss = SS(p->name());
 				auto sz = vss.size();
-				auto curTop = lua_gettop(m_ls);
+				auto curTop = lua_gettop(m_ls);//记录当前栈顶
 				if (vss.size() == 1) {
 					//分配一个内存 lua_newuserdata
 					lua_pushlightuserdata(m_ls, p);//push 一个轻量级用户数据到栈顶，lua不管理该指针内存
@@ -340,7 +212,8 @@ namespace app {
 					}
 					size_t index = 1;//到这里栈顶是表，从1开始，0已经是表了
 					while (index < sz - 1) {//检查表，直到倒数第二个，最后一个为函数
-						curType = lua_getfield(m_ls, -1, vss[index].c_str());//检查类型/重新入栈
+						//检查类型/重新入栈  将-1表处名vss[index]的表压入栈顶并返回类型
+						curType = lua_getfield(m_ls, -1, vss[index].c_str());
 						if (curType != LUA_TTABLE) {//不是表
 							assert(curType == LUA_TNIL);//如果不是table，是其它的，弹出调试警告
 							lua_pop(m_ls, 1);//弹出1个(栈顶)元素	
@@ -364,10 +237,12 @@ namespace app {
 				return true;
 			}
 
-			//注意，导出函数不能使用引用参数，可以使用const char *
+			//注意，导出函数不能使用引用参数，可以使用const char *,std::string
 			//可以返回多个参数，使用std::tuple ,不使用std::pair
 			//可以导出 aaa.bbb.ccc这种函数(会自动创建table(aaa.bbb))
 			//可以导出类的成员函数 std::function<xxx> = std::bind(&XXX::xxx,&v,std::placeholders::_1,...);
+			//如果需要的参数是 void *，则表示为 userdata 或者 lightuserdata
+			//如果返回值为 void *，则压栈给lua为 lightuserdata，如果为 app::lua::mtable ，则表示返回userdata
 			template <typename FuncT>
 			bool RegFunction(const char *pName, const  FuncT &fnc) {
 				using FuncType = typename base::function_traits<FuncT>::f_type;
