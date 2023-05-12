@@ -54,7 +54,7 @@ namespace app {
 		template <typename Function>
 		class LuaBinder :public pcb_set {
 		public:
-			using CallParamTuple = typename base::function_traits<Function>::param_tuple;
+			using CallParamTuple = typename base::function_traits<Function>::param_tuple_d;
 			using FuncRtType = typename base::function_traits<Function>::rt_type;
 
 			LuaBinder(lua_State *ls, const char *pName, Function &&f) : m_f(std::move(f)) {
@@ -237,12 +237,12 @@ namespace app {
 				return true;
 			}
 
-			//注意，导出函数不能使用引用参数，可以使用const char *,std::string
-			//可以返回多个参数，使用std::tuple ,不使用std::pair
+			//导出函数可以使用引用参数，仅为了提高效率，而不会修改lua参数里的值
+			//可以返回多个参数，使用std::tuple
 			//可以导出 aaa.bbb.ccc这种函数(会自动创建table(aaa.bbb))
 			//可以导出类的成员函数 std::function<xxx> = std::bind(&XXX::xxx,&v,std::placeholders::_1,...);
 			//如果需要的参数是 void *，则表示为 userdata 或者 lightuserdata
-			//如果返回值为 void *，则压栈给lua为 lightuserdata，如果为 app::lua::mtable ，则表示返回userdata
+			//如果返回值为 void *，则压栈给lua为 lightuserdata，如果为 app::lua::mtable ，则表示userdata
 			template <typename FuncT>
 			bool RegFunction(const char *pName, const  FuncT &fnc) {
 				using FuncType = typename base::function_traits<FuncT>::f_type;

@@ -32,7 +32,7 @@ namespace app {
 		template <typename MFunction>
 		class LuaBinderClass :public pcb_set {
 		public:
-			using CallParamTuple = typename base::mfunction_traits<MFunction>::param_tuple;
+			using CallParamTuple = typename base::mfunction_traits<MFunction>::param_tuple_d;
 			using ClassType = typename base::mfunction_traits<MFunction>::class_type;
 			using ReturnType = typename base::mfunction_traits<MFunction>::rt_type;
 

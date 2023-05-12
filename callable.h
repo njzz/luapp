@@ -25,7 +25,9 @@ namespace base {
 		typedef std::function<ReturnType(Args...)> f_type;//function 类型
 		typedef ReturnType(*p_type)(Args...);//pointer 类型
 		typedef ReturnType rt_type;//return 类型
-		typedef std::tuple<Args...> param_tuple;//param 类型
+		typedef std::tuple<Args...> param_tuple;//参数tuple类型
+		typedef std::tuple<std::decay_t<Args>...> param_tuple_d;//参数tuple类型，做类型退化
+		
 	};
 
 
@@ -36,7 +38,8 @@ namespace base {
 		typedef std::function<ReturnType(Args...)> f_type;//function 类型
 		typedef ReturnType(*p_type)(Args...);//pointer 类型
 		typedef ReturnType rt_type;//return 类型
-		typedef std::tuple<Args...> param_tuple;//param 类型
+		typedef std::tuple<Args...> param_tuple;//参数tuple类型
+		typedef std::tuple<std::decay_t<Args>...> param_tuple_d;//参数tuple类型，做类型退化
 	};
 
 	//指针函数特化 __stdcall
@@ -50,7 +53,8 @@ namespace base {
 		typedef std::function<ReturnType(Args...)> f_type;//function 类型
 		typedef ReturnType(*p_type)(Args...);//pointer 类型
 		typedef ReturnType rt_type;//return 类型
-		typedef std::tuple<Args...> param_tuple;//param 类型
+		typedef std::tuple<Args...> param_tuple;//参数tuple类型
+		typedef std::tuple<std::decay_t<Args>...> param_tuple_d;//参数tuple类型，做类型退化
 	};
 #endif
 
@@ -63,8 +67,9 @@ namespace base {
 	struct mfunction_traits < ReturnType(ClassType::*)(Args...)>
 	{
 		using class_type = ClassType;
-		using p_type = ReturnType(ClassType::*)(Args...);//pointer 类型
+		using p_type = ReturnType(ClassType::*)(Args...);//pointer 类型		
 		using param_tuple = std::tuple< Args...>;//param 类型
+		using param_tuple_d = std::tuple<std::decay_t<Args>...>;//param 类型
 		using rt_type = ReturnType;//return 类型
 	};
 
@@ -73,8 +78,9 @@ namespace base {
 	struct mfunction_traits < ReturnType(ClassType::*)(Args...) const>
 	{
 		using class_type = ClassType;
-		using p_type = ReturnType(ClassType::*)(Args...) const;//pointer 类型
+		using p_type = ReturnType(ClassType::*)(Args...) const;//pointer 类型		
 		using param_tuple = std::tuple< Args...>;//param 类型
+		using param_tuple_d = std::tuple<std::decay_t<Args>...>;//param 类型
 		using rt_type = ReturnType;//return 类型
 	};
 	

@@ -140,7 +140,7 @@ namespace app {
 				auto sr = luaL_checklstring(states, index, &t);
 				if (sr && t > 0) arg.assign(sr, t);
 			}
-			static void get(lua_State *ls, int idx, emp &) {//空结果特化
+			static void get(lua_State *ls, int idx, emp &) {//空结果
 			}
 			static void getargs(lua_State *states, int index) {}//0个参数版本
 
