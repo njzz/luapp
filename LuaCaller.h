@@ -178,6 +178,7 @@ namespace app {
 		protected:
 			//确认函数，并压栈
 			bool luax_assume_func(const char* func);
+			std::string m_err;//最后的错误
 
 			//根据Return类型推导返回值个数
 			template<typename T>
@@ -203,20 +204,21 @@ namespace app {
 				_Result result{};
 				auto top = lua_gettop(m_ls); // store stack
 				if (luax_assume_func(func)) {
-					auto sizeVar = sizeof...(args);
-					auto topCheck = lua_gettop(m_ls);//返回栈顶原始索引，因为栈底是1，所以就是当前栈大小
+					constexpr auto sizeVar = (int)sizeof...(args);
+					//auto topCheck = lua_gettop(m_ls);//返回栈顶原始索引，因为栈底是1，所以就是当前栈大小
 					LuaArg::setargs(m_ls,args...);
-					auto pushedVar = lua_gettop(m_ls) - topCheck;//参数个数
-					if (pushedVar == (int)sizeVar) {//参数检查
+					//auto pushedVar = lua_gettop(m_ls) - topCheck;//参数个数
+					//if (pushedVar == (int)sizeVar) {//参数检查
 						const int rtValueCount = ReturnParamCounts<_Result>::value;
-						if (lua_pcall(m_ls, pushedVar, rtValueCount, 0) == 0) {
+						if (lua_pcall(m_ls, sizeVar, rtValueCount, 0) == 0) {
 							if (rtValueCount > 0){
 								LuaArg::get(m_ls,-1,result);
 							}
 						}
-						//else {//call error,info:lua_tostring(m_ls, -1)
-						//}
-					}
+						else {
+							catch_lasterr();
+						}
+					//}
 				}
 				lua_settop(m_ls, top); // resume stack
 				return result;
@@ -249,8 +251,9 @@ namespace app {
 										LuaArg::get(m_ls, -1, result);
 									}
 								}
-								//else {//call error,info:lua_tostring(m_ls, -1)
-								//}
+								else {
+									catch_lasterr();
+								}
 							}
 						}
 					}
@@ -258,8 +261,15 @@ namespace app {
 						LuaArg::get(m_ls, -1, result);
 					}
 				}
+				else {
+					catch_lasterr();
+				}
 				lua_settop(m_ls, top); // resume stack		
 				return result;
+			}
+
+			void catch_lasterr() {//获取最后错误信息
+				LuaArg::get(m_ls,-1, m_err);
 			}
 
 		public:
@@ -286,6 +296,14 @@ namespace app {
 			bool LoadFile(const char *file);
 			//加载并运行文件
 			bool DoFile(const char *file);
+			//获取最后的错误信息
+			const std::string &GetLastError() const {
+				return m_err;
+			}
+			//清除错误信息
+			void ClearError() {
+				m_err.clear();
+			}
 		};
 	}
 }

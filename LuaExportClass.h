@@ -78,18 +78,40 @@ namespace app {
 			LuaExportor::PCBCache(r);//缓存起来
 			return r;
 		}
+
+
+		//导出对象创建模板函数
+		//可以在LUA_CLASS_EXPORT_BEGIN前特例化namespace app{namespace lua{ template<> T* CreateExportLuaObject<T>();}}来创建自定义类对象
+		//也可以在包含本文件前重新定义 LUA_EXPORT_NEWOBJ 宏来特殊处理
+		template<typename T>
+		inline T *CreateExportLuaObject() {
+			return new T{};
+		}
+
+		//带参数版本
+		//template<typename T>
+		//inline T *CreateExportLuaObjectP(lua_State *l) {
+		//	return CreateExportLuaObject<T>();
+		//}
+
+		template<typename T>
+		inline void DestroyExportLuaObject(T *o) {
+			delete o;
+		}
 		//////////////////// ---------------------
 
-		//可以通过重新定义 LUA_EXPORT_NEWOBJ 来重新定义对象xxx从lua里构造方式的方式  t:class type l:lua_state
+		
+
+//可以通过重新定义 LUA_EXPORT_NEWOBJ 来重新定义对象从lua里构造方式的方式  t:class type l:lua_state
 // 如:#define LUA_EXPORT_NEWOBJ(xxx,l) template<typename xxx> xxx *CreateByLua<xxx>(lua_tointeger(l,1));
 #ifndef LUA_EXPORT_NEWOBJ
-#define LUA_EXPORT_NEWOBJ(t,l) new t{};
+#define LUA_EXPORT_NEWOBJ(t,l) app::lua::CreateExportLuaObject<t>()
 #endif
 
-//可以通过重新定义 LUA_EXPORT_DESTROYOBJ 来重新定义对象xxx的析构方式  t:class type   o:void *,userdata的开始地址，如果转换为对象指针则为 *(T**)o 
+//可以通过重新定义 LUA_EXPORT_DESTROYOBJ 来重新定义对象的析构方式  t:class type   o:void *,userdata的开始地址，如果转换为对象指针则为 *(T**)o 
 // 如: #define LUA_EXPORT_DESTROYOBJ(xxx) void DestroyLuaObj(xxx);
 #ifndef LUA_EXPORT_DESTROYOBJ
-#define LUA_EXPORT_DESTROYOBJ(t,o) delete *((t**)o);
+#define LUA_EXPORT_DESTROYOBJ(t,o) app::lua::DestroyExportLuaObject<t>(*(t**)o)
 #endif
 
 //根据类型，获取metatable名
@@ -98,11 +120,12 @@ namespace app {
 #endif
 
 
-//在class里申明，对象需要有默认构造函数或者重新定义 LUA_EXPORT_NEWOBJ
-#define LUA_CLASS_EXPORT_DECLARE \
-		static void LuaClassRegister(lua_State *l);\
-		static int LuaClassConstructor(lua_State* L);\
-		static int LuaClassGC(lua_State* L)
+//修改class,可以在任意地方注册  ClassName::LuaClassRegister
+//在class里申明，对象需要有默认构造函数或重新定义 LUA_EXPORT_NEWOBJ 或特例化 CreateExportLuaObject
+#define LUA_CLASS_EXPORT_DECLARE  public:static void LuaClassRegister(lua_State *l);
+
+//不修改class，只能在定义LUA_CLASS_EXPORT_EBEGIN的地方注册
+#define LUA_CLASS_EXIST_REG(CLASSNAME,l)  LuaClassRegister_##CLASSNAME(l)
 
  /*
  Constructor
@@ -136,27 +159,43 @@ LUA_CLASS_EXPORT_END  当前元表在栈顶   注册__index方法，恢复栈顶
 PS:也可以将__index,__newindex 设置为C函数，然后在C代码里操作
 
  */
-#define LUA_CLASS_EXPORT_BEGIN(CLASSNAME)\
-		int CLASSNAME::LuaClassConstructor(lua_State* L) {\
+
+//Constructor and GC
+#define LUA_CLASS_EXPORT_CG(CLASSNAME)\
+		static int LuaClassConstructor_##CLASSNAME(lua_State* L) {\
 			auto obj = LUA_EXPORT_NEWOBJ(CLASSNAME,L);\
 			auto r = app::lua::LuaArg::set_metatable(L,app::lua::mtable{obj, LUA_EXPORT_METATABLE(CLASSNAME)},1);\
 			if(r==0) {LUA_EXPORT_DESTROYOBJ(CLASSNAME,&obj);}\
 			return r;\
 		}\
-		int CLASSNAME::LuaClassGC(lua_State* L){\
+		static int LuaClassGC_##CLASSNAME(lua_State* L){\
 			auto obj = (void*)luaL_checkudata(L, -1, LUA_EXPORT_METATABLE(CLASSNAME));\
 			auto isgc = *((char *)obj+sizeof(void*));\
 			if(isgc){ LUA_EXPORT_DESTROYOBJ(CLASSNAME,obj);}\
 			return 0;\
 		}\
+
+//Register Code
+#define LUA_CLASS_EXPORT_REGISTERCODE(CLASSNAME)\
+		auto top = lua_gettop(L);\
+		lua_pushcfunction(L, &LuaClassConstructor_##CLASSNAME);\
+		lua_setglobal(L,#CLASSNAME);\
+		luaL_newmetatable(L, LUA_EXPORT_METATABLE(CLASSNAME));\
+		lua_pushstring(L, "__gc");\
+		lua_pushcfunction(L, &LuaClassGC_##CLASSNAME);\
+		lua_settable(L, -3);\
+
+//not modify class,for exist
+#define LUA_CLASS_EXPORT_BEGIN_EXIST(CLASSNAME)\
+		LUA_CLASS_EXPORT_CG(CLASSNAME)\
+		static void LuaClassRegister_##CLASSNAME(lua_State *L) {\
+			LUA_CLASS_EXPORT_REGISTERCODE(CLASSNAME);\
+
+//modify class
+#define LUA_CLASS_EXPORT_BEGIN(CLASSNAME)\
+		LUA_CLASS_EXPORT_CG(CLASSNAME)\
 		void CLASSNAME::LuaClassRegister(lua_State *L) {\
-			auto top = lua_gettop(L);\
-			lua_pushcfunction(L, &CLASSNAME::LuaClassConstructor);\
-			lua_setglobal(L,#CLASSNAME);\
-			luaL_newmetatable(L, LUA_EXPORT_METATABLE(CLASSNAME));\
-			lua_pushstring(L, "__gc");\
-			lua_pushcfunction(L, &CLASSNAME::LuaClassGC);\
-			lua_settable(L, -3);\
+			LUA_CLASS_EXPORT_REGISTERCODE(CLASSNAME)\
 
 #define LUA_CLASS_EXPORT_FUNC(NAME,MEMFUNC) \
 		lua_pushstring(L,NAME);\

@@ -69,12 +69,20 @@ namespace app {
 
 		bool LuaCaller::LoadFile(const char * file)
 		{
-			return 0 == luaL_loadfile(m_ls, file);
+			auto r = ( 0 == luaL_loadfile(m_ls, file));
+			if (!r) {
+				catch_lasterr();
+			}
+			return r;
 		}
 
 		bool LuaCaller::DoFile(const char * file)
 		{
-			return 0 == luaL_dofile(m_ls, file);
+			auto r = (0== luaL_dofile(m_ls, file));
+			if (!r) {
+				catch_lasterr();
+			}
+			return r;
 		}
 	}
 }

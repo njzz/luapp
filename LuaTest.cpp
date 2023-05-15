@@ -4,11 +4,9 @@
 using namespace app;
 
  //--------------------测试调用lua函数---------------------------
- void RunLuaCaller() {
-	 lua::LuaWrap lw;
-	 //设定初始化函数 : 可以设定全局初始化函数 lua::SetGlobalInit
-	 lw.Init();
-	 if (lw.DoFile("hello.lua")) {//确认加载hello.lua成功
+ void RunLuaCaller(lua::LuaWrap &lw) {
+	 printf("\n----begin test call lua function----\n");
+	 if (lw.DoFile("hello.lua")) {//确认加载hello.lua成功	
 
 		 //调用初始化函数 Lua_initfunc 里加载都hello.lua里的函数
 		 printf("AddNum(20,30) = %d \n", lw.Call<int>("AddNum", 20, 30));
@@ -32,6 +30,9 @@ using namespace app;
 		 //直接调用字符串函数
 		 lw.RunString<void>("print(\"run sample string code\") ");
 	 }
+	 else {
+		 printf(lw.GetLastError().c_str());
+	 }
  }
 
  //-----------------------向lua导出函数--------------------------
@@ -49,9 +50,8 @@ using namespace app;
  }
 
  //测试向lua导出函数
- void RunLuaExportor(){
-	lua::LuaWrap lw;
-	lw.Init();
+ void RunLuaExportor(lua::LuaWrap &lw){
+	printf("\n----begin test function export----\n");
 
 	lw.RegFunction("func_addstr", &NormalFunc);
 	lw.RunString<void>("print(func_addstr('call normal function'))");
@@ -146,10 +146,10 @@ using namespace app;
 	 LUA_CLASS_EXPORT_FUNC("ppt", &TestClassBase::print) //虚函数，调用派生类的函数
 LUA_CLASS_EXPORT_END() //结束
 
-//导出类测试
- void RunLuaExportClass() {
-	 lua::LuaWrap lw;
-	 lw.Init();
+//导出类测试函数
+ void RunLuaExportClass(lua::LuaWrap &lw) {
+
+	 printf("\n----begin test class export----\n");
 
 	 //调用导出类的  LuaClassRegister 函数导出该类到当前状态机
 	 TestClass::LuaClassRegister(lw.get());
@@ -165,8 +165,7 @@ LUA_CLASS_EXPORT_END() //结束
              print('t1:getvalue()='..t1:getvalue())  --6
              print('t2:getvalue()='..t2:getvalue()) --5 
              t1:ppt()  --print
-		)"
-		 );
+		)" );
 
 	 //定义一个 lambda ，导出给lua，接收lua传递的参数
 	 auto UseLuaObj = [](void *o) {
@@ -193,11 +192,84 @@ LUA_CLASS_EXPORT_END() //结束
 	 //PS:也可以使用 LUA_EXPORT_METATABLE(TestClass)
  }
 
+
+ //-----------------------------------向Lua导出已有类，不修改/不继承类-----------------------
+ //不修改类的情况
+ class Existed_NoModify {
+ protected:
+	 Existed_NoModify() { printf("Existed_NoModify Create!\n"); }//不能在外部构造
+	 ~Existed_NoModify(){ printf("Existed_NoModify Destroy!\n"); }//不能在外部析构
+ public:
+	 void print() {
+		 printf("existed class print\n");
+	 }
+
+	 //未导出到lua的构造函数/类工厂
+	 static Existed_NoModify* Create() {
+		 return new Existed_NoModify();
+	 }
+
+	 static void DestroyObj(Existed_NoModify* o) {
+		 delete o;
+	 }
+ };
+
+ //使用函数特例化方式重新构造对象
+ namespace app {
+	 namespace lua {
+		 template<> Existed_NoModify* CreateExportLuaObject<Existed_NoModify>() {
+			 return Existed_NoModify::Create();
+		 }
+	 }
+ }
+
+ //使用宏方式重新构造对象
+//#undef LUA_EXPORT_NEWOBJ
+//#define LUA_EXPORT_NEWOBJ(t,l) Existed_NoModify::Create()
+
+
+  //使用函数特例化方式重新析构对象
+ namespace app {
+	 namespace lua {
+		 template<> void DestroyExportLuaObject<Existed_NoModify>(Existed_NoModify *o) {
+			 Existed_NoModify::DestroyObj(o);
+		 }
+	 }
+ }
+//使用宏方式重新定义析构
+//#undef LUA_EXPORT_DESTROYOBJ
+//#define LUA_EXPORT_DESTROYOBJ(n,o) Existed_NoModify::DestroyObj(*(Existed_NoModify**)o);
+
+
+LUA_CLASS_EXPORT_BEGIN_EXIST(Existed_NoModify)  //导出实现开始
+	 LUA_CLASS_EXPORT_FUNC("eprint", &Existed_NoModify::print)
+LUA_CLASS_EXPORT_END() //结束
+
+//导出类测试/不修改类
+void RunLuaExportExistedClass(lua::LuaWrap &lw) {
+
+	printf("\n----begin test exist class export----\n");
+
+	 //现存类导出
+	 LUA_CLASS_EXIST_REG(Existed_NoModify, lw.get());
+
+	 //对象在lua生成，并调用成员函数
+	 lw.RunString<void>(R"(			 
+			 local e1 = Existed_NoModify()
+			 e1:eprint()
+		)" );
+ }
+
+
 int main(void)
 {
-	RunLuaCaller();
-	RunLuaExportor();
-	RunLuaExportClass();
+	lua::LuaWrap lw;	
+	lw.Init();//设定初始化函数 : 可以设定全局初始化函数 lua::SetGlobalInit
+
+	RunLuaCaller(lw);
+	RunLuaExportor(lw);
+	RunLuaExportClass(lw);
+	RunLuaExportExistedClass(lw);
 	lua::CleanAll();//清理所有
 	system("pause");
 	return 0;
