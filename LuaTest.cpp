@@ -214,11 +214,14 @@ LUA_CLASS_EXPORT_END() //结束
 	 }
  };
 
- //使用函数特例化方式重新构造对象
+ //使用函数特例化方式重新构造/析构对象
  namespace app {
 	 namespace lua {
 		 template<> Existed_NoModify* CreateExportLuaObject<Existed_NoModify>() {
 			 return Existed_NoModify::Create();
+		 }
+		 template<> void DestroyExportLuaObject<Existed_NoModify>(Existed_NoModify *o) {
+			 Existed_NoModify::DestroyObj(o);
 		 }
 	 }
  }
@@ -228,17 +231,9 @@ LUA_CLASS_EXPORT_END() //结束
 //#define LUA_EXPORT_NEWOBJ(t,l) Existed_NoModify::Create()
 
 
-  //使用函数特例化方式重新析构对象
- namespace app {
-	 namespace lua {
-		 template<> void DestroyExportLuaObject<Existed_NoModify>(Existed_NoModify *o) {
-			 Existed_NoModify::DestroyObj(o);
-		 }
-	 }
- }
 //使用宏方式重新定义析构
 //#undef LUA_EXPORT_DESTROYOBJ
-//#define LUA_EXPORT_DESTROYOBJ(n,o) Existed_NoModify::DestroyObj(*(Existed_NoModify**)o);
+//#define LUA_EXPORT_DESTROYOBJ(n,o) Existed_NoModify::DestroyObj(*(Existed_NoModify**)o)
 
 
 LUA_CLASS_EXPORT_BEGIN_EXIST(Existed_NoModify)  //导出实现开始
@@ -250,7 +245,7 @@ void RunLuaExportExistedClass(lua::LuaWrap &lw) {
 
 	printf("\n----begin test exist class export----\n");
 
-	 //现存类导出
+	 //类导出注册给lua
 	 LUA_CLASS_EXIST_REG(Existed_NoModify, lw.get());
 
 	 //对象在lua生成，并调用成员函数
