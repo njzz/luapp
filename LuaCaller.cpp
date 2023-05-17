@@ -7,19 +7,21 @@ namespace app {
 			//将new userdata压栈，最多后一个字节
 			//表明关联的对象是否随userdata回收，需要和导出类 GC 联动
 			//如果最后一个字节  0:表示不回收  1:随userdata 回收
-			constexpr auto szptr = sizeof(void*);
-			auto a = (void*)lua_newuserdata(ls, szptr + sizeof(char));
-			memcpy(a, &(mt.pointer), szptr);//将指针数据写入
-			memcpy((char*)a + szptr, &gc, 1);//写入最后一个字节
-			auto type = luaL_getmetatable(ls, mt.table_name); //将table压栈
 			int r = 0;
-			if (type == LUA_TTABLE) {
-				lua_setmetatable(ls, -2); //将栈顶的table 设置为 -2 位置userdata 的元表，弹出栈顶，栈顶为userdata
-				r = 1;
-			}
-			else {
-				assert(false);
-				lua_pop(ls, 2);//弹出2个，栈顶和userdata,userdata由lua回收
+			if (mt.pointer && mt.table_name && *mt.table_name) {
+				constexpr auto szptr = sizeof(void*);
+				auto a = (void*)lua_newuserdata(ls, szptr + sizeof(char));
+				memcpy(a, &(mt.pointer), szptr);//将指针数据写入
+				memcpy((char*)a + szptr, &gc, 1);//写入最后一个字节
+				auto type = luaL_getmetatable(ls, mt.table_name); //将table压栈			
+				if (type == LUA_TTABLE) {
+					lua_setmetatable(ls, -2); //将栈顶的table 设置为 -2 位置userdata 的元表，弹出栈顶，栈顶为userdata
+					r = 1;
+				}
+				else {//not exist table
+					assert(false);
+					lua_pop(ls, 2);//弹出2个，栈顶和userdata,userdata由lua回收
+				}
 			}
 			return r;
 		}

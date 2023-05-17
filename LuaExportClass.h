@@ -36,8 +36,7 @@ namespace app {
 			using ClassType = typename base::mfunction_traits<MFunction>::class_type;
 			using ReturnType = typename base::mfunction_traits<MFunction>::rt_type;
 
-			LuaBinderClass(lua_State *ls, const char *pName, MFunction f) :m_f(f) {
-				m_ls=ls;
+			LuaBinderClass( const char *pName, MFunction f) :m_f(f) {
 				m_name = pName;
 			}
 			~LuaBinderClass() {
@@ -49,8 +48,9 @@ namespace app {
 			int FillParamsAndCall(lua_State *states, const std::index_sequence<indexs... > &) {
 				//constexpr auto param_size = std::tuple_size<CallParamTuple>::value;				
 				auto obj =(ClassType **) lua_touserdata(states, 1);//使用的userdata元表方式，那么第1个参数是userdata的值
-				LuaArg::getargs(states, 2, std::get<indexs>(m_p)...);//lua参数从2开始，用tuple存储参数
-				return InvokeMemberFunction<ReturnType>::call(states,*obj, m_f, std::get<indexs>(m_p)...);//用tuple里的参数去调用c函数
+				CallParamTuple params{};//参数
+				LuaArg::getargs(states, 2, std::get<indexs>(params)...);//lua参数从2开始，用tuple存储参数
+				return InvokeMemberFunction<ReturnType>::call(states,*obj, m_f, std::get<indexs>(params)...);//用tuple里的参数去调用c函数
 			}
 
 			//继承函数，开始调用
@@ -67,15 +67,14 @@ namespace app {
 
 		protected:
 			MFunction m_f;//成员函数指针
-			CallParamTuple m_p{};//参数
 		};
 
 		//每个状态机里，每个成员函数都会创建一个 LuaBinderClass
 		template<typename T>
 		pcb_set *CreateClassPCB(lua_State *l, T v, const char *n) {
 			//当前 -1 为元表
-			auto r = new LuaBinderClass<T>(l, n, v);
-			LuaExportor::PCBCache(r);//缓存起来
+			auto r = new LuaBinderClass<T>(n, v);
+			LuaExportor::PCBCache(l,r);//缓存起来
 			return r;
 		}
 
@@ -88,24 +87,33 @@ namespace app {
 			return new T{};
 		}
 
-		//带参数版本
-		//template<typename T>
-		//inline T *CreateExportLuaObjectP(lua_State *l) {
-		//	return CreateExportLuaObject<T>();
-		//}
+		//带参数版本，参数可以通过 lua::LuaArg::get(l,1/2/3/4,...)/getargs(l,1,...) 获取
+		template<typename T>
+		inline T *CreateExportLuaObjectP(lua_State *l) {
+			return CreateExportLuaObject<T>();
+		}
 
 		template<typename T>
 		inline void DestroyExportLuaObject(T *o) {
 			delete o;
 		}
 		//////////////////// ---------------------
+		struct ClassRegSet {
+			const char *cons_name=nullptr;//构造器，注册名
+			lua_CFunction cons_fnc=nullptr;//构造器，注册函数
+			pcb_set *cons_pcb=nullptr;//构造器注册 pcb 和上面两个互斥，且优先使用
 
-		
+			const char *metatable=nullptr;//metatable 名
+			lua_CFunction gc_fnc=nullptr;//gc函数
+			std::list<pcb_set*> funcs;//可调用成员
+
+		};
+		bool ExportClassToLua(lua_State *L,const ClassRegSet &rs);
 
 //可以通过重新定义 LUA_EXPORT_NEWOBJ 来重新定义对象从lua里构造方式的方式  t:class type l:lua_state
 // 如:#define LUA_EXPORT_NEWOBJ(xxx,l) template<typename xxx> xxx *CreateByLua<xxx>(lua_tointeger(l,1));
 #ifndef LUA_EXPORT_NEWOBJ
-#define LUA_EXPORT_NEWOBJ(t,l) app::lua::CreateExportLuaObject<t>()
+#define LUA_EXPORT_NEWOBJ(t,l) app::lua::CreateExportLuaObjectP<t>(l)
 #endif
 
 //可以通过重新定义 LUA_EXPORT_DESTROYOBJ 来重新定义对象的析构方式  t:class type   o:void *,userdata的开始地址，如果转换为对象指针则为 *(T**)o 
@@ -124,8 +132,11 @@ namespace app {
 //在class里申明，对象需要有默认构造函数或重新定义 LUA_EXPORT_NEWOBJ 或特例化 CreateExportLuaObject
 #define LUA_CLASS_EXPORT_DECLARE  public:static void LuaClassRegister(lua_State *l);
 
-//不修改class，只能在定义LUA_CLASS_EXPORT_EBEGIN的地方注册
+//注册宏，4种
+#define LUA_CLASS_USE_REG(CLASSNAME,l)  LuaClassRegister_##CLASSNAME(l)
 #define LUA_CLASS_EXIST_REG(CLASSNAME,l)  LuaClassRegister_##CLASSNAME(l)
+#define LUA_CLASS_CUSTOMER_REG(CLASSNAME,l)  LuaClassRegister_##CLASSNAME(l)
+#define LUA_CLASS_EXPORT_REG(CLASSNAME,l)  CLASSNAME::LuaClassRegister(l)
 
  /*
  Constructor
@@ -136,77 +147,78 @@ namespace app {
 GC对象回收:只回收new出来的对象，绑定的函数对象是类公用的，状态机关闭时统一回收
 1.检查-1位置参数是否是一个类型为classname的用户数据（参见 luaL_newmetatable ),返回数据的地址（lua_touserdata）
 
-
-LuaClassRegister  注册开始
-1.将构造方法入栈
-2.将构造方法名(类名)设置为全局符号，然后弹出栈顶
-3.创建一个新表(类名，作为 userdata 的元表)，将它添加到注册表registry中，入栈
-4.压入gc名，以重新定义回收
-5.gc方法入栈
-6.设置元表gc方法 lua_settable(L, -3) //t[k] = v，t:index(-3)在栈中的值(元表) v:栈顶(gc方法) k:是栈顶下的内容(-2,gc名字)  然后弹出k和v
-
-LUA_CLASS_EXPORT_FUNC  当前元表在栈顶  将函数加入到元表方法
-7.成员函数名入栈
-8.创建lightuserdata PCB 回调函数通过upvalue索引取值，入栈
-9.闭包入栈，带上创建的 PCB，并弹出关联的PCB栈
-10.将元表name方法设置为闭包函数 lua_settable(L,-3) t[k] = v，t:index在栈中的值(元表) v:栈顶(闭包方法) k:是栈顶下的内容(函数名字)  然后弹出k和v，元表依旧在栈顶
-
-LUA_CLASS_EXPORT_END  当前元表在栈顶   注册__index方法，恢复栈顶
-11.__index 名入栈
-12.-2元表复制入栈   lua_pushvalue(L, -2)  完成后栈 -1: 元表 -2:__index -3:元表
-13.将元表index设置为自己 lua_settable(L, -3) t[k] = v  t:index在栈中的值(元表) v:栈顶(元表) k:是栈顶下的内容(__index)  然后弹出k和v
-
-PS:也可以将__index,__newindex 设置为C函数，然后在C代码里操作
-
  */
 
-//Constructor and GC
-#define LUA_CLASS_EXPORT_CG(CLASSNAME)\
-		static int LuaClassConstructor_##CLASSNAME(lua_State* L) {\
+#define LUA_FNC_NAME_CONSTRUCTOR(CLASSNAME) LuaClassConstructor_##CLASSNAME
+#define LUA_FNC_NAME_GC(CLASSNAME) LuaClassGC_##CLASSNAME
+
+//可以特例化 app::lua::CreateExportLuaObjectP，然后调用 LuaArg::get/getargs,获取参数
+//需要在lua里通过函数构造的，参数为 ClassName(类型名),TableName(元表名)
+//构造一个对象，并设置对象的metatable为TABLENAME，1:标记随userdata销毁c++对象
+#define LUA_CLASS_FNC_CONSTRUCTOR_DEFINE(CLASSNAME,TABLENAME)\
+		static int LUA_FNC_NAME_CONSTRUCTOR(CLASSNAME)(lua_State* L) {\
 			auto obj = LUA_EXPORT_NEWOBJ(CLASSNAME,L);\
-			auto r = app::lua::LuaArg::set_metatable(L,app::lua::mtable{obj, LUA_EXPORT_METATABLE(CLASSNAME)},1);\
+			auto r = app::lua::LuaArg::set(L,app::lua::btable{obj, TABLENAME});\
 			if(r==0) {LUA_EXPORT_DESTROYOBJ(CLASSNAME,&obj);}\
 			return r;\
 		}\
-		static int LuaClassGC_##CLASSNAME(lua_State* L){\
-			auto obj = (void*)luaL_checkudata(L, -1, LUA_EXPORT_METATABLE(CLASSNAME));\
+
+//析构，所有的一致 ，如果只是使用mtable，则isgc = 0 不析构
+#define LUA_CLASS_FNC_GC_DEFINE(CLASSNAME,TABLENAME)\
+		static int LUA_FNC_NAME_GC(CLASSNAME)(lua_State* L){\
+			auto obj = (void*)luaL_checkudata(L, -1,TABLENAME);\
 			auto isgc = *((char *)obj+sizeof(void*));\
 			if(isgc){ LUA_EXPORT_DESTROYOBJ(CLASSNAME,obj);}\
 			return 0;\
 		}\
 
-//Register Code
-#define LUA_CLASS_EXPORT_REGISTERCODE(CLASSNAME)\
-		auto top = lua_gettop(L);\
-		lua_pushcfunction(L, &LuaClassConstructor_##CLASSNAME);\
-		lua_setglobal(L,#CLASSNAME);\
-		luaL_newmetatable(L, LUA_EXPORT_METATABLE(CLASSNAME));\
-		lua_pushstring(L, "__gc");\
-		lua_pushcfunction(L, &LuaClassGC_##CLASSNAME);\
-		lua_settable(L, -3);\
 
-//not modify class,for exist
-#define LUA_CLASS_EXPORT_BEGIN_EXIST(CLASSNAME)\
-		LUA_CLASS_EXPORT_CG(CLASSNAME)\
+//-----------------------------------------------------
+
+//不修改类，不用申明，对象只能在lua使用(使用mtable)，不能调用CLASSNAME()创建
+//使用 LUA_CLASS_USE_REG(classname,l) 注册
+//不定义Constructor函数，不定义GC函数,定义注册函数，构造参数调用注册函数
+#define LUA_CLASS_USE_BEGIN(CLASSNAME)\
 		static void LuaClassRegister_##CLASSNAME(lua_State *L) {\
-			LUA_CLASS_EXPORT_REGISTERCODE(CLASSNAME);\
+				app::lua::ClassRegSet rs;/*rs.gc_fnc=&LUA_FNC_NAME_GC(CLASSNAME);*/rs.metatable = LUA_EXPORT_METATABLE(CLASSNAME);\
 
-//modify class
+//不修改类，不用申明，可在lua里通过CLASSNAME()构造
+//使用 LUA_CLASS_EXIST_REG(classname,l) 注册
+//定义Constructor函数,定义GC函数，定义注册函数，构造参数调用注册函数
+#define LUA_CLASS_EXIST_BEGIN(CLASSNAME)\
+		LUA_CLASS_FNC_CONSTRUCTOR_DEFINE(CLASSNAME,LUA_EXPORT_METATABLE(CLASSNAME))\
+		LUA_CLASS_FNC_GC_DEFINE(CLASSNAME,LUA_EXPORT_METATABLE(CLASSNAME))\
+		static void LuaClassRegister_##CLASSNAME(lua_State *L) {\
+			app::lua::ClassRegSet rs;rs.gc_fnc=&LUA_FNC_NAME_GC(CLASSNAME);rs.metatable = LUA_EXPORT_METATABLE(CLASSNAME);\
+			rs.cons_name= LUA_EXPORT_METATABLE(CLASSNAME);rs.cons_fnc=&LUA_FNC_NAME_CONSTRUCTOR(CLASSNAME);\
+
+//修改/派生类，类中使用 LUA_CLASS_EXPORT_DECLARE 申明
+//使用 LUA_CLASS_EXPORT_REG(classname,l) 注册，或在任意地方使用 CLASSNAME::LuaClassRegister(l) 注册
+//定义Constructor函数,定义GC函数，定义注册函数，构造参数调用注册函数
 #define LUA_CLASS_EXPORT_BEGIN(CLASSNAME)\
-		LUA_CLASS_EXPORT_CG(CLASSNAME)\
+		LUA_CLASS_FNC_CONSTRUCTOR_DEFINE(CLASSNAME,LUA_EXPORT_METATABLE(CLASSNAME))\
+		LUA_CLASS_FNC_GC_DEFINE(CLASSNAME,LUA_EXPORT_METATABLE(CLASSNAME))\
 		void CLASSNAME::LuaClassRegister(lua_State *L) {\
-			LUA_CLASS_EXPORT_REGISTERCODE(CLASSNAME)\
+			app::lua::ClassRegSet rs;rs.gc_fnc=&LUA_FNC_NAME_GC(CLASSNAME);rs.metatable = LUA_EXPORT_METATABLE(CLASSNAME);\
+			rs.cons_name= LUA_EXPORT_METATABLE(CLASSNAME);rs.cons_fnc=&LUA_FNC_NAME_CONSTRUCTOR(CLASSNAME);\
 
-#define LUA_CLASS_EXPORT_FUNC(NAME,MEMFUNC) \
-		lua_pushstring(L,NAME);\
-		lua_pushlightuserdata(L, app::lua::CreateClassPCB(L, MEMFUNC, NAME));\
-		lua_pushcclosure(L, &app::lua::pcb_set::LuaCallBack, 1);\
-		lua_settable(L, -3);\
+//自定义注册，可以自定义tablename,构造函数名(支持.分割)，构造函数(需要已经定义，且函数必须返回btable  )
+//使用 LUA_CLASS_CUSTOMER_REG(classname,l) 注册，可在lua里通过CONSFUNC_NAME()构造
+//定义GC函数，构造参数调用注册函数
+#define LUA_CLASS_CUSTOMER_BEGIN(CLASSNAME,TABLENAME,CONSFUNC_NAME,CONSFNC)\
+		LUA_CLASS_FNC_GC_DEFINE(CLASSNAME,TABLENAME)\
+		void LuaClassRegister_##CLASSNAME(lua_State *L) {\
+			using RTType =typename base::function_traits<decltype(CONSFNC)>::rt_type;\
+			static_assert(std::is_same<RTType,app::lua::btable>::value,"construct function must return btable");\
+			app::lua::ClassRegSet rs;rs.gc_fnc=&LUA_FNC_NAME_GC(CLASSNAME);rs.metatable = TABLENAME;\
+			rs.cons_pcb = app::lua::CreatePCB(L, CONSFNC, CONSFUNC_NAME);\
 
-#define LUA_CLASS_EXPORT_END() \
-		lua_pushstring(L, "__index");\
-		lua_pushvalue(L, -2);\
-		lua_settable(L, -3);\
-		lua_settop(L, top);}		
+//成员函数为类成员函数
+#define LUA_MEM_FUNC(NAME,MEMFUNC) 	rs.funcs.push_back(app::lua::CreateClassPCB(L, MEMFUNC, NAME));
+
+//成员函数未其它普通函数，注:第一个参数必须为 void *,然后在函数内转换为 CLASS **
+#define LUA_OTHER_FUNC(NAME,FUNC) rs.funcs.push_back(app::lua::CreatePCB(L, FUNC, NAME));
+
+#define LUA_CLASS_END()  app::lua::ExportClassToLua(L,rs);}		
 	}
 }

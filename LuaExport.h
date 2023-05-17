@@ -27,7 +27,6 @@ namespace app {
 				return pv->call(L);
 			}
 
-			lua_State *m_ls;//关联的状态机
 			std::string m_name;//name
 		};
 
@@ -57,8 +56,7 @@ namespace app {
 			using CallParamTuple = typename base::function_traits<Function>::param_tuple_d;
 			using FuncRtType = typename base::function_traits<Function>::rt_type;
 
-			LuaBinder(lua_State *ls, const char *pName, Function &&f) : m_f(std::move(f)) {
-				m_ls=ls;
+			LuaBinder(const char *pName,const Function &f) : m_f(f) {
 				m_name = pName;
 			}
 			~LuaBinder() {
@@ -69,8 +67,9 @@ namespace app {
 			template<size_t... indexs>
 			int FillParamsAndCall(lua_State *states, const std::index_sequence<indexs... > &) {
 				//constexpr auto param_size = std::tuple_size<CallParamTuple>::value;
-				LuaArg::getargs(states, 1, std::get<indexs>(m_p)...);//lua参数从1开始，用tuple存储参数
-				return InvokeCppFunction<FuncRtType>::call(states, m_f, std::get<indexs>(m_p)...);//用tuple里的参数去调用c函数
+				CallParamTuple params{};//参数
+				LuaArg::getargs(states, 1, std::get<indexs>(params)...);//lua参数从1开始，用tuple存储参数
+				return InvokeCppFunction<FuncRtType>::call(states, m_f, std::get<indexs>(params)...);//用tuple里的参数去调用c函数
 			}
 
 			//继承函数，开始调用
@@ -92,22 +91,30 @@ namespace app {
 
 		protected:
 			Function m_f;//回调函数
-			CallParamTuple m_p{};//参数
 		};
+
+		template<typename FuncT>
+		pcb_set *CreatePCB(lua_State *l,const FuncT &v, const char *n) {
+			using FuncType = typename base::function_traits<FuncT>::f_type;
+			//每注册一个函数，产生一个LuaBinder 对象
+			auto pcb = new  LuaBinder<FuncType>( n, v);
+			LuaExportor::PCBCache(l,pcb);//缓存起来
+			return pcb;
+		}
 
 		//向lua导出函数
 		class LuaExportor :public lua::LuaCaller {		
 		public:
-			using PCBList = std::list<lua::pcb_set *>;
+			using PCBList = std::list<lua::pcb_set *>;//不在不同状态机共享 pcb，可能在不同状态机同名不同函数，同函数不同名。
 			using CacheList = base::lock_t<std::unordered_map<lua_State *,PCBList>>;
 			using Lock_Guard = std::lock_guard<CacheList>;			
 
 			//缓存起来?
-			static CacheList &PCBCache(lua::pcb_set *pcb = nullptr) {
+			static CacheList &PCBCache(lua_State *l=nullptr, lua::pcb_set *pcb = nullptr) {
 				static CacheList cachePCBList;
 				if (pcb) {
 					Lock_Guard gb(cachePCBList);
-					cachePCBList[pcb->m_ls].push_back(pcb);
+					cachePCBList[l].push_back(pcb);
 				}
 				return cachePCBList;
 			}
@@ -177,7 +184,7 @@ namespace app {
 				}
 			}
 
-			std::vector<std::string > SS(const std::string& name) {
+			static std::vector<std::string > SS(const std::string& name) {
 				size_t offst = 0, end = 0;
 				end = name.find_first_of('.', offst);
 				std::vector<std::string > r;
@@ -190,35 +197,35 @@ namespace app {
 				return r;
 			}
 
-			bool PCBRegister( pcb_set *p) {
+			static bool PCBGlobalRegister( pcb_set *p,lua_State *ls) {
 				auto vss = SS(p->name());
 				auto sz = vss.size();
-				auto curTop = lua_gettop(m_ls);//记录当前栈顶
+				auto curTop = lua_gettop(ls);//记录当前栈顶
 				if (vss.size() == 1) {
 					//分配一个内存 lua_newuserdata
-					lua_pushlightuserdata(m_ls, p);//push 一个轻量级用户数据到栈顶，lua不管理该指针内存
-					lua_pushcclosure(m_ls, &pcb_set::LuaCallBack, 1);//闭包入栈，并关联栈上的1个参数(从栈顶开始)，完成后弹出关联的参数，函数内用 lua_upvalueindex 获取关联参数
-					lua_setglobal(m_ls, vss[0].c_str());//设置全局符号 t[k] = v  t:全局表  k:name  v:栈顶元素闭包  完成后弹出栈顶
+					lua_pushlightuserdata(ls, p);//push 一个轻量级用户数据到栈顶，lua不管理该指针内存
+					lua_pushcclosure(ls, &pcb_set::LuaCallBack, 1);//闭包入栈，并关联栈上的1个参数(从栈顶开始)，完成后弹出关联的参数，函数内用 lua_upvalueindex 获取关联参数
+					lua_setglobal(ls, vss[0].c_str());//设置全局符号 t[k] = v  t:全局表  k:name  v:栈顶元素闭包  完成后弹出栈顶
 				}
 				else {
 					//table 类型 xxx.yyy.zzz
-					auto curType = lua_getglobal(m_ls, vss[0].c_str());//全局，将tab入栈顶
+					auto curType = lua_getglobal(ls, vss[0].c_str());//全局，将tab入栈顶
 					if (curType != LUA_TTABLE) {//第一个不是table
 						assert(curType == LUA_TNIL);//如果不是table，是其它的，弹出调试警告
-						lua_pop(m_ls, 1);//弹出1个元素(栈顶的null)	
-						lua_newtable(m_ls);//新表到栈顶  lua_createtable(m_ls, 0, sizeof(luaL_Reg) - 1);
-						lua_setglobal(m_ls, vss[0].c_str());//t[k]=v   t:全局表 k:table名  v:栈顶新表，将第一个设置为全局表   完成后弹出栈顶
-						lua_getglobal(m_ls, vss[0].c_str());//表重新入栈顶
+						lua_pop(ls, 1);//弹出1个元素(栈顶的null)	
+						lua_newtable(ls);//新表到栈顶  lua_createtable(m_ls, 0, sizeof(luaL_Reg) - 1);
+						lua_setglobal(ls, vss[0].c_str());//t[k]=v   t:全局表 k:table名  v:栈顶新表，将第一个设置为全局表   完成后弹出栈顶
+						lua_getglobal(ls, vss[0].c_str());//表重新入栈顶
 					}
 					size_t index = 1;//到这里栈顶是表，从1开始，0已经是表了
 					while (index < sz - 1) {//检查表，直到倒数第二个，最后一个为函数
 						//检查类型/重新入栈  将-1表处名vss[index]的表压入栈顶并返回类型
-						curType = lua_getfield(m_ls, -1, vss[index].c_str());
+						curType = lua_getfield(ls, -1, vss[index].c_str());
 						if (curType != LUA_TTABLE) {//不是表
 							assert(curType == LUA_TNIL);//如果不是table，是其它的，弹出调试警告
-							lua_pop(m_ls, 1);//弹出1个(栈顶)元素	
-							lua_newtable(m_ls);//新表到栈顶 -1
-							lua_setfield(m_ls, -2, vss[index].c_str());//t[k]=v 设置 设置老表(-2)的k(name)为新表(-1)，并弹出栈顶新表
+							lua_pop(ls, 1);//弹出1个(栈顶)元素	
+							lua_newtable(ls);//新表到栈顶 -1
+							lua_setfield(ls, -2, vss[index].c_str());//t[k]=v 设置 设置老表(-2)的k(name)为新表(-1)，并弹出栈顶新表
 							//不增加 index++ ，让表入栈
 						}
 						else {
@@ -227,13 +234,12 @@ namespace app {
 					}
 
 					//最后一个
-					lua_pushlightuserdata(m_ls, p);//push 一个轻量级用户数据到栈顶	
-					lua_pushcclosure(m_ls, &pcb_set::LuaCallBack, 1);//闭包入栈，并关联栈上的1个参数(从栈顶开始)，完成后弹出关联的参数，函数内用 lua_upvalueindex 获取关联参数
-					lua_setfield(m_ls, -2, vss[index].c_str()); // t[k] = v  t:idx 处的表(-2)   k:函数名  v:栈顶元素(闭包)
+					lua_pushlightuserdata(ls, p);//push 一个轻量级用户数据到栈顶	
+					lua_pushcclosure(ls, &pcb_set::LuaCallBack, 1);//闭包入栈，并关联栈上的1个参数(从栈顶开始)，完成后弹出关联的参数，函数内用 lua_upvalueindex 获取关联参数
+					lua_setfield(ls, -2, vss[index].c_str()); // t[k] = v  t:idx 处的表(-2)   k:函数名  v:栈顶元素(闭包)
 					//////////////////////////////////////////////////
 				}
-				lua_settop(m_ls, curTop);//栈恢复
-				PCBCache(p);
+				lua_settop(ls, curTop);//栈恢复
 				return true;
 			}
 
@@ -245,11 +251,10 @@ namespace app {
 			//如果返回值为 void *，则压栈给lua为 lightuserdata，如果为 app::lua::mtable ，则表示userdata
 			template <typename FuncT>
 			bool RegFunction(const char *pName, const  FuncT &fnc) {
-				using FuncType = typename base::function_traits<FuncT>::f_type;
-				//每注册一个函数，产生一个LuaBinder 对象
-				auto newExport = new  LuaBinder<FuncType>(m_ls,pName, FuncType(fnc));
-				return PCBRegister(newExport);
+				auto pcb = CreatePCB(m_ls, fnc, pName);
+				return PCBGlobalRegister(pcb,m_ls);
 			}					
 		};
 	}
 }
+

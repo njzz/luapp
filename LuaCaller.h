@@ -14,7 +14,7 @@ namespace app {
 		struct emp {};
 
 		//传递给lua的void *参数，作为lightuserdata
-		//传递给lua的mtable参数，创建新的userdata,并设置元表table_name，一般用于把在c++里面创建的对象，传递给lua使用，并且已经在lua里导出该类
+		//传递给lua的mtable参数，创建新的userdata,内容为pointer,并设置元表table_name，一般用于把在c++里面创建的对象，传递给lua使用
 		//从lua获取的 void *(返回值/参数) 为 userdata 或 lightuserdata，需要根据具体函数转换 如果为导出对象T，则转换为 T**
 		//PS:所有以mtable方式传递给lua的userdata对象，由lua管理内存，里面的p不参与析构
 		// 1.如果p是c++导出类对象，在lua创建，然后多次传入穿出，则由原始关联的userdata析构时析构 
@@ -23,6 +23,13 @@ namespace app {
 			mtable(void *p, const char *name) :pointer(p),table_name(name){}
 			void *pointer;
 			const char *table_name;//一般为类名
+		};
+
+		//构建绑定的对象 bind-table
+		//传递给lua的btable参数，pointer会随着绑定的userdata一起析构，适用于pointer新创建出来的情况
+		struct btable {
+			btable(void *p, const char *name):mt(p,name) {}
+			mtable mt;
 		};
 
 		
@@ -65,10 +72,14 @@ namespace app {
 				lua_pushlstring(ls, arg.c_str(), arg.length());
 				return 1;
 			}
-
+			//flag:是否随 userdata 析构 mt.pointer
 			static int set_metatable(lua_State *ls, const mtable &mt, char flag);
 			inline static int set(lua_State *ls, const mtable &mt) {
 				return set_metatable(ls, mt, 0);
+			}
+
+			inline static int set(lua_State *ls,const btable &bt){
+				return set_metatable(ls, bt.mt, 1);
 			}
 
 			inline static int set(lua_State *ls, void* arg) {
@@ -237,15 +248,15 @@ namespace app {
 					if (strFunc!=nullptr && *strFunc) {//如果里面有函数需要调用
 						if (luax_assume_func(strFunc))
 						{
-							auto sizeVar = sizeof...(args);
-							auto topCheck = lua_gettop(m_ls);//当前栈顶
+							constexpr auto sizeVar = sizeof...(args);
+							//auto topCheck = lua_gettop(m_ls);//当前栈顶
 							LuaArg::setargs(m_ls,args...);
 
-							auto pushedVar = lua_gettop(m_ls) - topCheck;//参数个数
+							//auto pushedVar = lua_gettop(m_ls) - topCheck;//参数个数
 
-							if (pushedVar == (int)sizeVar) {//参数检查
+							//if (pushedVar == (int)sizeVar) {//参数检查
 
-								if (lua_pcall(m_ls, pushedVar, rtValueCount, 0) == 0) {
+								if (lua_pcall(m_ls, sizeVar, rtValueCount, 0) == 0) {
 									if (rtValueCount > 0)
 									{
 										LuaArg::get(m_ls, -1, result);
@@ -254,7 +265,7 @@ namespace app {
 								else {
 									catch_lasterr();
 								}
-							}
+							//}
 						}
 					}
 					else if (rtValueCount > 0) {
