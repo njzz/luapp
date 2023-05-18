@@ -36,26 +36,29 @@ namespace app {
 		//Lua参数操作
 		struct LuaArg {
 			//set 压栈给lua 1.调用lua函数时压栈参数给lua函数  2.lua调用c++后返回给lua结果
-			inline static int set(lua_State *ls, bool arg) {
+			//不支持的版本，匹配成功，k = void
+			template <typename T, typename K = typename std::enable_if<!std::is_integral<T>::value>::type>
+			inline static int set(lua_State *ls, T ,K *k=nullptr) {
+				//不支持的参数，如果忽略，在lua里会获取到一个nil(函数参数/返回值)
+#ifndef LUA_IGNORE_UNSUPPORT_TYPE				
+				static_assert(false, "LuaArg::set type not support,use mtable or btable? or define LUA_IGNORE_UNSUPPORT_TYPE to ingore.");
+#else
+				lua_pushnil(ls);
+#endif
+				return 1;
+			}
+
+			//integer 版本，包括各种 bool ,各种 unsigned
+			template <typename T, typename = typename std::enable_if<std::is_integral<T>::value>::type>
+			inline static int set(lua_State *ls, T arg) {
 				// lua_checkstack确保堆栈上至少有"n"个额外空位。假设不能把堆栈扩展到相应的尺寸，函数返回"false"。
 				// 失败的原因包括将把栈扩展到比固定最大尺寸还大（至少是几千个元素）或分配内存失败。
 				// lua 栈已经足够大，不用检查
 				//if (lua_checkstack(ls, 1))
-				lua_pushboolean(ls, arg?1:0);
+				lua_pushinteger(ls,(lua_Integer) arg);
 				return 1;
 			}
-			inline static int set(lua_State *ls, int arg) {
-				lua_pushinteger(ls, arg);
-				return 1;
-			}
-			inline static int set(lua_State *ls, long long arg) {
-				lua_pushinteger(ls, arg);
-				return 1;
-			}
-			inline static int set(lua_State *ls, size_t arg) {
-				lua_pushinteger(ls, arg);
-				return 1;
-			}
+
 			inline static int set(lua_State *ls, float arg) {
 				lua_pushnumber(ls, arg);
 				return 1;
@@ -94,12 +97,6 @@ namespace app {
 			//注意 set 和 setargs
 			inline static int setargs(lua_State *ls) { return 0; }//0个参数版本
 
-			template <typename T>
-			static int set(lua_State *, T) {
-				static_assert(/*std::is_integral<T>::value*/false, "set:arg type not support: [bool,int,long long,size_t,float,double,const char * ,void *,std::string,std::tuple");
-				return 0;
-			}
-
 			template<typename Ty, typename...Args>
 			inline static int setargs(lua_State *ls, Ty &&arg1, Args&&...args) {
 				auto rt=set(ls, arg1);//调用其它版本函数
@@ -121,19 +118,6 @@ namespace app {
 			}
 
 			//get 系列 1.c++调用lua后获取lua的返回值    2.lua调用c++时，获取lua传过来的参数
-			static void get(lua_State *states, int index, bool &arg) {
-				//lua_toboolean
-				arg = luaL_checkinteger(states, index) != 0;
-			}
-			static void get(lua_State *states, int index, int &arg) {
-				arg = (int)luaL_checkinteger(states, index);
-			}
-			static void get(lua_State *states, int index, long long &arg) {
-				arg = (long long)luaL_checkinteger(states, index);
-			}
-			static void get(lua_State *states, int index, size_t &arg) {
-				arg = (size_t)luaL_checkinteger(states, index);
-			}
 			static void get(lua_State *states, int index, float &arg) {
 				arg = (float)luaL_checknumber(states, index);
 			}
@@ -155,9 +139,19 @@ namespace app {
 			}
 			static void getargs(lua_State *states, int index) {}//0个参数版本
 
-			template <typename T>
-			static void get(lua_State *,int, T) {
-				static_assert(/*std::is_integral<T>::value*/false, "get:arg type not support: [bool,int,long long,size_t,float,double,const char * ,void *,std::string,std::tuple");
+			//只有可转换成整形的会匹配到该函数，包括 bool,char ，以及各种 unsigned 版本
+			template <typename T, typename = typename std::enable_if<std::is_integral<T>::value>::type>
+			static void get(lua_State *states,int idx, T &arg) {
+				arg = (T)luaL_checkinteger(states, idx);
+			}
+
+			//不支持的版本，匹配成功，k = void
+			template <typename T, typename K = typename std::enable_if<!std::is_integral<T>::value>::type>
+			static void get(lua_State *, int , T,K *k= nullptr ) {
+				//未知类型，如果忽略，则c++端为默认值
+#ifndef LUA_IGNORE_UNSUPPORT_TYPE
+				static_assert(false, "LuaArg::get type not support,define LUA_IGNORE_UNSUPPORT_TYPE to ingore?");
+#endif
 			}
 
 			template<typename Ty, typename...Args> inline
