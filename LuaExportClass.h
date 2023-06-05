@@ -138,6 +138,11 @@ namespace app {
 #define LUA_CLASS_CUSTOMER_REG(CLASSNAME,l)  LuaClassRegister_##CLASSNAME(l)
 #define LUA_CLASS_EXPORT_REG(CLASSNAME,l)  CLASSNAME::LuaClassRegister(l)
 
+//该宏表明导出的对象已经在c++端析构，lua gc 的时候，不要再调用析构(USE_BEGIN的不需要)
+//参数为 void *,在LUA_OTHER_FUNC导出函数中的第一个参数
+//注:确保析构后LUA端不会再调用
+#define LUA_OBJ_GCED(x)  *((char *)x+sizeof(void*))=0
+
  /*
  Constructor
  1.创建一个对象， 

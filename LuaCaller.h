@@ -59,6 +59,10 @@ namespace app {
 				return 1;
 			}
 
+			inline static int set(lua_State *ls, bool arg) {
+				lua_pushboolean(ls, arg?1:0);//单独设置bool，不让lua里integer 0为真
+				return 1;
+			}
 			inline static int set(lua_State *ls, float arg) {
 				lua_pushnumber(ls, arg);
 				return 1;
@@ -118,6 +122,9 @@ namespace app {
 			}
 
 			//get 系列 1.c++调用lua后获取lua的返回值    2.lua调用c++时，获取lua传过来的参数
+			static void get(lua_State *states, int index, bool &arg) {
+				arg = (bool)lua_toboolean(states, index);//如果lua返回true用 luaL_checkinteger 会报类型错误
+			}
 			static void get(lua_State *states, int index, float &arg) {
 				arg = (float)luaL_checknumber(states, index);
 			}
@@ -145,12 +152,29 @@ namespace app {
 				arg = (T)luaL_checkinteger(states, idx);
 			}
 
+			//获取指针帮助:建议使用 void *，这里辅助将 lightuserdata转换为指针，如果lua传递的是userdata，需要二次转换
+			//set不需要处理，因为不确定设置为什么，需要手动为 void *(light) 或者 mtable/btable
+			template<typename T,bool V>
+			struct UnKnowPointerHelper {
+				static void get(lua_State *, int, T &){}
+			};
+
+			template<typename T>
+			struct UnKnowPointerHelper<T,true> {
+				static void get(lua_State *ls, int idx, T& v) {
+					LuaArg::get(ls, idx, (void*&)v);
+				}
+			};
+
+
 			//不支持的版本，匹配成功，k = void
 			template <typename T, typename K = typename std::enable_if<!std::is_integral<T>::value>::type>
-			static void get(lua_State *, int , T,K *k= nullptr ) {
+			static void get(lua_State *l, int i, T& t,K *k= nullptr ) {
 				//未知类型，如果忽略，则c++端为默认值
 #ifndef LUA_IGNORE_UNSUPPORT_TYPE
 				static_assert(false, "LuaArg::get type not support,define LUA_IGNORE_UNSUPPORT_TYPE to ingore?");
+#else
+				UnKnowPointerHelper<T, std::is_pointer<T>::value>::get(l, i, t);
 #endif
 			}
 
@@ -294,7 +318,7 @@ namespace app {
 			typename std::conditional<std::is_same<_Result, void>::value, lua::emp, _Result>::type  RunString(const char  *str, const char *strFunc = nullptr, const _Args&...args) {
 				//可以return void;
 				using RtType = typename std::conditional<std::is_same<_Result, void>::value, lua::emp, _Result>::type;
-				return RunString_x<emp>(str, strFunc, args...);
+				return RunString_x<RtType>(str, strFunc, args...);
 			}
 
 			//加载文件

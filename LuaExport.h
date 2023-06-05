@@ -197,15 +197,14 @@ namespace app {
 				return r;
 			}
 
-			static bool PCBGlobalRegister( pcb_set *p,lua_State *ls) {
+			static bool TopStackRegisteName( lua_State *ls ,const std::string &name) {
 				auto vss = SS(p->name());
 				auto sz = vss.size();
 				auto curTop = lua_gettop(ls);//记录当前栈顶
-				if (vss.size() == 1) {
-					//分配一个内存 lua_newuserdata
-					lua_pushlightuserdata(ls, p);//push 一个轻量级用户数据到栈顶，lua不管理该指针内存
-					lua_pushcclosure(ls, &pcb_set::LuaCallBack, 1);//闭包入栈，并关联栈上的1个参数(从栈顶开始)，完成后弹出关联的参数，函数内用 lua_upvalueindex 获取关联参数
-					lua_setglobal(ls, vss[0].c_str());//设置全局符号 t[k] = v  t:全局表  k:name  v:栈顶元素闭包  完成后弹出栈顶
+				assert(curTop > 0);
+				if (vss.size() == 1) {//xxx 类型
+					lua_pushvalue(ls, -1);//栈顶复制入栈，保持堆栈平衡，因为下面 setglobal会弹出栈顶，最后的settop只能push一个nil到栈顶了
+					lua_setglobal(ls, name.c_str());//设置全局符号 t[k] = v  t:全局表  k:name  v:栈顶元素  完成后弹出栈顶
 				}
 				else {
 					//table 类型 xxx.yyy.zzz
@@ -234,13 +233,35 @@ namespace app {
 					}
 
 					//最后一个
-					lua_pushlightuserdata(ls, p);//push 一个轻量级用户数据到栈顶	
-					lua_pushcclosure(ls, &pcb_set::LuaCallBack, 1);//闭包入栈，并关联栈上的1个参数(从栈顶开始)，完成后弹出关联的参数，函数内用 lua_upvalueindex 获取关联参数
-					lua_setfield(ls, -2, vss[index].c_str()); // t[k] = v  t:idx 处的表(-2)   k:函数名  v:栈顶元素(闭包)
+					lua_pushvalue(ls, curTop);//将top处内容复制到栈顶
+					lua_setfield(ls, -2, vss[index].c_str()); // t[k] = v  t:idx 处的表(-2)   k:vss[index].c_str()  v:栈顶元素   然后弹出栈顶
 					//////////////////////////////////////////////////
 				}
 				lua_settop(ls, curTop);//栈恢复
 				return true;
+			}
+
+			static bool CFuncGlobalRegister(lua_CFunction cf, const std::string &name, lua_State *ls) {
+				if (cf && !name.empty() && ls) {
+					lua_pushcfunction(ls, cf);//函数入栈
+					TopStackRegisteName(ls, name);//注册
+					lua_pop(ls, 1);//恢复栈
+					return true;
+				}
+				return false;
+			}
+
+			static bool PCBGlobalRegister( pcb_set *p,lua_State *ls) {
+				//auto curTop = lua_gettop(ls);//记录当前栈顶
+				if (p && ls) {
+					lua_pushlightuserdata(ls, p);//push 一个轻量级用户数据到栈顶，lua不管理该指针内存
+					lua_pushcclosure(ls, &pcb_set::LuaCallBack, 1);//闭包入栈，并关联栈上的1个参数(从栈顶开始)，完成后弹出关联的参数，函数内用 lua_upvalueindex 获取关联参数
+					TopStackRegisteName(ls, p->name());//将栈顶闭包注册到全局
+					//lua_settop(ls, curTop);//栈恢复
+					lua_pop(ls, 1);//push一个闭包，恢复它
+					return true;
+				}
+				return false;
 			}
 
 			//导出函数可以使用引用参数，仅为了提高效率，而不会修改lua参数里的值

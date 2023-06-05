@@ -35,12 +35,13 @@ namespace app {
 
 			//初始化，如果是新的状态机，会调用 SetGlobalInit 设置的初始化函数
 			//返回值 0:成功  1:新建状态机失败  2:全局初始化函数失败
-			int Init();
+			int Init(long long version=0);
 
 			//销毁当前状态机
 			void Destroy();
 
 		protected:
+			long long m_version;//当前版本
 			void operator =(const LuaWrap &) = delete;
 		};
 
